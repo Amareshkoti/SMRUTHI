@@ -24,13 +24,13 @@ and raises the warning that no single report could.
 
 ## Quick start
 
-You need Node 20+ and the **Expo Go** app on your phone. Phone and computer must be on the
-same Wi-Fi.
+Runs on WSL (Ubuntu). You need the **Expo Go** app on your phone, with the phone
+on the same Wi-Fi as this machine.
 
 ### 1. Server
 
 ```bash
-cd server
+cd ~/smruti/server
 npm install
 cp .env.example .env      # then put your NVIDIA key in it
 npm start
@@ -41,18 +41,53 @@ Check it: `curl http://localhost:8787/api/health`
 ### 2. App
 
 ```bash
-cd mobile
+cd ~/smruti/mobile
 npm install
-npx expo start
+npm run start:lan
 ```
 
-Scan the QR code with Expo Go. The app finds the server automatically — it reuses the same
-computer address Expo served the bundle from, so there is nothing to configure.
+Scan the QR code with Expo Go.
+
+Use `start:lan`, not `expo start`. Under WSL, Expo advertises `localhost`, which
+your phone cannot dial — and the app works out the server address from that same
+host, so the wrong value breaks the bundle download *and* every server call.
+`start:lan` pins both to this machine's LAN address.
 
 ### 3. Try it
 
-Upload a file from `samples/` to your Drive, set it to **Anyone with the link**, copy the link,
-and paste it into the Memory screen.
+Upload a file from `samples/` to your Drive, set it to **Anyone with the link**,
+copy the link, and paste it into the Memory screen.
+
+---
+
+## WSL networking
+
+WSL2 normally sits behind NAT, so nothing inside it is reachable from your phone.
+This project relies on **mirrored networking**, set once in `%USERPROFILE%\.wslconfig`
+on the Windows side:
+
+```ini
+[wsl2]
+networkingMode=mirrored
+dnsTunneling=true
+autoProxy=true
+```
+
+Apply it with `wsl --shutdown`, then reopen WSL. Check it worked — `hostname -I`
+inside WSL should return the same address as your Windows Wi-Fi adapter, not a
+`172.23.x` NAT address. To undo, delete the file and run `wsl --shutdown`.
+
+**If your phone still cannot connect,** the Wi-Fi itself is likely blocking it.
+Office and campus networks often enable client isolation, which stops phones from
+reaching laptops regardless of any of this. Two ways round it:
+
+```bash
+npm run start:lan -- --tunnel   # routes through Expo's relay, needs internet
+```
+
+or put both devices on your phone's hotspot.
+
+The server binds to all interfaces, so once Metro is reachable the API is too.
 
 ---
 
