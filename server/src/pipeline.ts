@@ -1,9 +1,10 @@
 import { fetchFromDrive } from './drive/download.js';
+import { resolveDriveLink } from './drive/resolve.js';
 import { parseDocumentImage } from './nim/parse.js';
 import { extractFacts } from './nim/extract.js';
 import { prepareForParse } from './util/image.js';
 import { config } from './config.js';
-import { mockExtraction } from './mock.js';
+import { mockDocuments } from './mock.js';
 import type { Extraction } from './schema.js';
 
 export interface IngestedDocument extends Extraction {
@@ -21,16 +22,20 @@ export interface IngestedDocument extends Extraction {
  * no copy of the user's document.
  */
 export async function ingestFromDrive(link: string): Promise<IngestedDocument[]> {
+  // Offline mode short-circuits BEFORE the download, not after. The point of it
+  // is to survive a venue with no working network, so it must not need one --
+  // but the link is still validated, so a typo fails the same way it would
+  // online.
+  if (config.mock) {
+    const target = resolveDriveLink(link);
+    return mockDocuments(target.id);
+  }
+
   const files = await fetchFromDrive(link);
   const out: IngestedDocument[] = [];
 
   for (const file of files) {
     const started = Date.now();
-
-    if (config.mock) {
-      out.push({ ...mockExtraction(file.name), sourceId: file.id, sourceName: file.name, pages: 1, ms: 0 });
-      continue;
-    }
 
     const pages = await toPageImages(file.bytes, file.mimeType);
     const markdowns: string[] = [];

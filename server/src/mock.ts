@@ -1,4 +1,4 @@
-import type { Extraction } from './schema.js';
+import type { IngestedDocument } from './pipeline.js';
 
 /**
  * Offline demo mode (SMRUTI_MOCK=1). Returns the five-year series without
@@ -12,24 +12,29 @@ const YEARS = [
   { y: 2025, a1c: 6.4, fbs: 118, chol: 205, hospital: 'Continental Labs', doctor: 'Dr. A. Venkatesh' },
 ];
 
-let cursor = 0;
 
-export function mockExtraction(name: string): Extraction {
-  const yearInName = name.match(/(20\d{2})/)?.[1];
-  const row = yearInName
-    ? (YEARS.find((r) => String(r.y) === yearInName) ?? YEARS[cursor++ % YEARS.length]!)
-    : YEARS[cursor++ % YEARS.length]!;
-  const date = `${row.y}-03-11`;
-  const base = { date, doctor: row.doctor, hospital: row.hospital, refLow: null, refHigh: null };
-  return {
-    documentTitle: 'Laboratory Investigation Report',
-    documentDate: date,
-    hospital: row.hospital,
-    doctor: row.doctor,
-    facts: [
-      { ...base, analyte: 'HbA1c', analyteAsPrinted: 'Glycated Haemoglobin (HbA1c)', value: row.a1c, unit: '%', refLow: 4.0, refHigh: 6.5 },
-      { ...base, analyte: 'Fasting Glucose', analyteAsPrinted: 'Fasting Blood Sugar (FBS)', value: row.fbs, unit: 'mg/dL', refLow: 70, refHigh: 110 },
-      { ...base, analyte: 'Total Cholesterol', analyteAsPrinted: 'Total Cholesterol', value: row.chol, unit: 'mg/dL', refHigh: 200 },
-    ],
-  };
+/**
+ * Offline mode returns the full five-year series in one go, so a single paste
+ * reproduces the whole demo without any network at all.
+ */
+export function mockDocuments(sourceId: string): IngestedDocument[] {
+  return YEARS.map((row) => {
+    const date = `${row.y}-03-11`;
+    const base = { date, doctor: row.doctor, hospital: row.hospital, refLow: null, refHigh: null };
+    return {
+      documentTitle: 'Laboratory Investigation Report',
+      documentDate: date,
+      hospital: row.hospital,
+      doctor: row.doctor,
+      facts: [
+        { ...base, analyte: 'HbA1c', analyteAsPrinted: 'Glycated Haemoglobin (HbA1c)', value: row.a1c, unit: '%', refLow: 4.0, refHigh: 6.5 },
+        { ...base, analyte: 'Fasting Glucose', analyteAsPrinted: 'Fasting Blood Sugar (FBS)', value: row.fbs, unit: 'mg/dL', refLow: 70, refHigh: 110 },
+        { ...base, analyte: 'Total Cholesterol', analyteAsPrinted: 'Total Cholesterol', value: row.chol, unit: 'mg/dL', refHigh: 200 },
+      ],
+      sourceId: `${sourceId}-${row.y}`,
+      sourceName: `${row.y}_${row.hospital.split(' ')[0]!.toLowerCase()}.png`,
+      pages: 1,
+      ms: 0,
+    };
+  });
 }
