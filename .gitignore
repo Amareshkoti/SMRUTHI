@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.local
+dist/
+build/
+*.log
+.expo/
+scratch/
+demo-facts.json
+parse-output.md
+server.log
+samples/_test_*

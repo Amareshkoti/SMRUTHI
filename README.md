@@ -1,0 +1,215 @@
+# SMRUTI
+
+A life memory for every Indian. Your health records, read once and remembered — so the pattern
+across ten years is visible to you, not locked inside five different hospitals.
+
+Built for Smart India Hackathon. React Native (Expo) app, Node extraction server, NVIDIA NIM models.
+
+---
+
+## What it does
+
+You paste a Google Drive link to a medical report. SMRUTI reads it, pulls out the numbers that
+matter, and forgets the file. Once several reports are in, it shows you the shape of the years —
+and raises the warning that no single report could.
+
+| Screen | What it does |
+|---|---|
+| **Memory** | Add a report from a Drive link. See every report you have added, on a timeline. |
+| **Patterns** | Charts each measurement across years. Raises an early warning when a series drifts. |
+| **Ask** | Ask anything about your own reports, in English, Hindi or Telugu. |
+| **Yours** | What is stored, where, and a button that erases all of it. |
+
+---
+
+## Quick start
+
+You need Node 20+ and the **Expo Go** app on your phone. Phone and computer must be on the
+same Wi-Fi.
+
+### 1. Server
+
+```bash
+cd server
+npm install
+cp .env.example .env      # then put your NVIDIA key in it
+npm start
+```
+
+Check it: `curl http://localhost:8787/api/health`
+
+### 2. App
+
+```bash
+cd mobile
+npm install
+npx expo start
+```
+
+Scan the QR code with Expo Go. The app finds the server automatically — it reuses the same
+computer address Expo served the bundle from, so there is nothing to configure.
+
+### 3. Try it
+
+Upload a file from `samples/` to your Drive, set it to **Anyone with the link**, copy the link,
+and paste it into the Memory screen.
+
+---
+
+## Getting the NVIDIA key
+
+1. Go to <https://build.nvidia.com> and sign in (free).
+2. Open any model, e.g. [nemotron-parse](https://build.nvidia.com/nvidia/nemotron-parse).
+3. Click **Get API Key**. It starts with `nvapi-`.
+4. Put it in `server/.env` as `NVIDIA_API_KEY=`.
+
+One key covers every model. Verify yours reaches all three:
+
+```bash
+cd server && npx tsx src/probe.ts
+```
+
+That runs a real report through both extraction stages and prints the facts it found.
+
+---
+
+## The models, and why each one
+
+| Stage | Model | Why |
+|---|---|---|
+| Read the document | `nvidia/nemotron-parse` | A document VLM. Keeps table structure and reading order, which is what a lab report *is*. Generic OCR flattens it into word soup. |
+| Structure the facts | `nvidia/nemotron-3-super-120b-a12b` | Turns messy markdown into typed rows. Knows "Glycated Haemoglobin", "HbA1C" and "A1c" are one test. |
+| Answer in English / Hindi | `nvidia/nemotron-3-super-120b-a12b` | Fluent, grounded answers over the user's own facts. |
+| Answer in Telugu | `nvidia/nemotron-3-ultra-550b-a55b` | See below. |
+
+### Two findings worth knowing
+
+**Telugu needs Ultra, not Super.** Measured against the live endpoints: `nemotron-3-super-120b`
+produced Telugu contaminated with Devanagari and romanised words, collapsed into token repetition,
+and rendered a *rising* trend as **"improving"** — inverting the clinical meaning. Ultra produced
+correct, clean Telugu. Telugu is routed to Ultra in `server/src/config.ts`.
+
+**`riva-translate` cannot do Telugu.** It supports 37 languages; Telugu is not among them. Asked
+for Telugu it silently answers in Hindi, with no error. It is used for Hindi only.
+
+### How nemotron-parse actually behaves
+
+Its API differs from every other chat model here, and the differences are load-bearing:
+
+- It **rejects text input**. A `{"type":"text"}` part returns `400 does not support text input`.
+  The documented control tokens for the self-hosted container are not accepted on the hosted
+  endpoint. Send the image and nothing else.
+- It accepts **exactly one message**. A system message returns `400 Expected exactly one message`.
+- It returns **nothing in `message.content`**. The result arrives as a tool call named
+  `markdown_bbox` whose arguments are a JSON array of `{bbox, text, type}` blocks.
+- Inline base64 must stay under ~180 KB or the request hangs rather than erroring. Pages are
+  downscaled to JPEG first (`server/src/util/image.ts`).
+
+---
+
+## Where the API key lives
+
+```
+server/.env  →  server/src/config.ts  →  server/src/nim/client.ts  →  Authorization header
+```
+
+That is the only path. The key is never in the app, never in source, never in git. The phone
+talks only to your server. If the app called NVIDIA directly, anyone could unzip the APK and
+take the key.
+
+---
+
+## Where your data lives
+
+```
+Google Drive          the original scan, untouched, still yours
+    ↓
+server                bytes held in memory for two model calls, then dropped
+    ↓
+phone (SQLite)        ~200 bytes per result
+```
+
+The server writes nothing to disk and keeps no database. A 4 MB scan becomes a handful of rows
+like `2024-03-11 | HbA1c | 6.4 | % | Dr. Rao`.
+
+**Honest limit:** the phone database is not encrypted at rest. Expo Go cannot load SQLCipher;
+that needs a development build. A per-install key in the hardware keystore signs each row so
+stored values cannot be silently altered, but that is integrity, not confidentiality. The
+Privacy screen says so in the app rather than implying protection that is not there.
+
+---
+
+## The warning is computed, not generated
+
+`server/src/health/trends.ts` is plain TypeScript. It groups facts by measurement, requires at
+least three points, checks the direction is consistent, fits a slope, and compares against
+reference ranges and clinical thresholds.
+
+**No model is asked whether the user is at risk.** A model is only asked to restate, in the
+user's language, a finding the code already proved. This matters twice: a judge asking "what if
+it hallucinated that?" gets a real answer, and an invented medical warning is the one bug in this
+product that could actually hurt somebody.
+
+It is covered by tests, including the exact scenario from the pitch:
+
+```bash
+cd server && npm test
+```
+
+---
+
+## Offline demo mode
+
+Set `SMRUTI_MOCK=1` in `server/.env`. The server returns the five-year series from fixtures and
+never calls NVIDIA. The demo then survives dead venue Wi-Fi or an expired key.
+
+---
+
+## Sample data
+
+`samples/` holds five generated lab reports — 2021 to 2025, five different Hyderabad hospitals.
+Every value sits inside its own printed reference range, so no single report looks abnormal. Only
+the series gives it away:
+
+```
+HbA1c   2021: 5.6   2022: 5.8   2023: 6.0   2024: 6.2   2025: 6.4   (%)
+```
+
+Regenerate with `python samples/make_reports.py`. The data is synthetic.
+
+---
+
+## Layout
+
+```
+server/
+  src/
+    config.ts          all credentials and model ids
+    schema.ts          the fact shape, and analyte canonicalisation
+    pipeline.ts        Drive link in, facts out
+    mock.ts            offline fixtures
+    nim/
+      client.ts        the only place the key is attached to a request
+      parse.ts         stage 1, nemotron-parse
+      extract.ts       stage 2, markdown to typed JSON
+      answer.ts        multilingual answering
+    drive/             share-link parsing and download
+    health/trends.ts   the deterministic trend detector
+    util/image.ts      downscaling for the inline size limit
+  test/                36 tests, no network needed
+mobile/
+  src/
+    theme.ts           palette and type scale
+    api.ts             server client, finds the dev machine automatically
+    db.ts              on-device SQLite
+    components/        the thread, the chart, the warning
+    screens/           Memory, Patterns, Ask, Yours
+samples/               five generated lab reports
+```
+
+---
+
+## Not a medical device
+
+SMRUTI surfaces patterns in documents you already own. It does not diagnose, and it is not a
+substitute for a doctor. Every warning it shows says so.
