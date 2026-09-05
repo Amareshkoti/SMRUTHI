@@ -20,7 +20,8 @@
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
-    "ios": "expo start --ios"
+    "ios": "expo start --ios",
+    "start:lan": "./start.sh"
   },
   "private": true
 }
