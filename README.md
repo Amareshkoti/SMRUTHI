@@ -108,6 +108,37 @@ That runs a real report through both extraction stages and prints the facts it f
 
 ---
 
+## Troubleshooting on WSL
+
+**`libasound.so.2: cannot open shared object file`**
+
+React Native DevTools is an Electron app, and a bare Ubuntu image is missing one
+of its libraries. Install it:
+
+```bash
+sudo apt install -y libasound2t64
+```
+
+On Ubuntu 24.04 the package is `libasound2t64`, not `libasound2` — it was renamed
+in the 64-bit time_t transition. Everything else Electron needs (GTK, NSS, GBM,
+ATK, X11) is already in the default image.
+
+This error is **not fatal**. It only affects the DevTools debugger window; Metro
+serves the bundle normally and the app runs on your phone either way. Ignore it if
+you are not using the debugger.
+
+**A GUI window will not open**
+
+Check WSLg is on: `echo $DISPLAY` should print `:0` and `/mnt/wslg` should exist.
+
+**Metro starts but the phone cannot load the bundle**
+
+See the WSL networking section above. In order: confirm `hostname -I` matches your
+Windows Wi-Fi address, confirm you used `npm run start:lan`, then suspect Wi-Fi
+client isolation.
+
+---
+
 ## The models, and why each one
 
 | Stage | Model | Why |
