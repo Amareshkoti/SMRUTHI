@@ -29,17 +29,38 @@ function systemPrompt(language: Language): string {
 Answer ONLY in ${LANGUAGE_NAME[language]}. Every word of your reply must be in that language.
 
 You are given facts taken from the user's OWN medical reports, and any trends
-that were computed from them by software.
+that were computed from them by software. Every question that arrives is one
+of two kinds. Decide which one this is, then follow its rules.
 
-Absolute rules:
-- Use ONLY the facts given. If the answer is not in them, say you do not have
-  that report yet. Never estimate, never fill a gap from general knowledge.
+1) Questions about the user's OWN health, reports, results or trends -- for
+   example "is my sugar rising", "what was my HbA1c in 2023", "which
+   hospitals have my reports".
+   - Use ONLY the facts and trends given below. Never estimate, never fill a
+     gap from general knowledge.
+   - If what's given does not contain enough to answer, say so plainly and
+     honestly -- you do not have that in their records yet. Do not guess.
+   - Never invent a trend. If a trend is supplied, you may restate it. If
+     none is supplied, do not imply one exists.
+
+2) General medical or health knowledge questions that are NOT about the
+   user's own records -- for example what a medicine or tablet is for, what a
+   test measures, or general symptoms and health information.
+   - Answer these from your own general medical knowledge, clearly and
+     simply.
+   - Make clear this is general information, not drawn from their reports
+     and not personal medical advice.
+   - Never give a specific dosage; tell them to confirm dosage with a doctor
+     or pharmacist.
+
+If the question is unrelated to health or medicine entirely, say briefly that
+you can only help with health and medicine questions.
+
+Rules for both kinds:
 - Never diagnose and never name a disease as a conclusion. You may repeat a
   range description that was given to you.
-- Never invent a trend. If a trend is supplied, you may restate it. If none is
-  supplied, do not imply one exists.
 - Speak simply and warmly, for someone who may not read well. Short sentences.
-- When something is worth acting on, end by suggesting they see a doctor.`;
+- When something is worth acting on, end by suggesting they see a doctor (or
+  a pharmacist for medicine questions).`;
 }
 
 function factLines(facts: HealthFact[]): string {
@@ -62,13 +83,12 @@ export async function answerQuestion(opts: {
 }): Promise<string> {
   const { question, facts, insights, language } = opts;
 
-  if (facts.length === 0) {
-    return {
-      en: 'You have not added any reports yet. Add one from Google Drive and I can answer questions about it.',
-      hi: 'आपने अभी तक कोई रिपोर्ट नहीं जोड़ी है। Google Drive से एक रिपोर्ट जोड़ें, फिर मैं उसके बारे में बता सकता हूँ।',
-      te: 'మీరు ఇంకా ఏ రిపోర్ట్ కూడా చేర్చలేదు. Google Drive నుండి ఒక రిపోర్ట్ చేర్చండి, అప్పుడు నేను దాని గురించి చెప్పగలను.',
-    }[language];
-  }
+  const factsBlock =
+    facts.length > 0
+      ? `Facts from the user's reports:\n${factLines(facts)}`
+      : `The user has not added any reports yet -- there are no facts from their own records. ` +
+        `If they ask about their own health or records, say so honestly. You can still answer a ` +
+        `general medical knowledge question.`;
 
   const trendBlock = insights.length
     ? `\n\nTrends computed by software (these are verified facts, not your opinion):\n` +
@@ -81,10 +101,7 @@ export async function answerQuestion(opts: {
       { role: 'system', content: systemPrompt(language) },
       {
         role: 'user',
-        content:
-          `Facts from the user's reports:\n${factLines(facts)}` +
-          trendBlock +
-          `\n\nThe user asks: ${question}`,
+        content: factsBlock + trendBlock + `\n\nThe user asks: ${question}`,
       },
     ],
     temperature: 0.3,

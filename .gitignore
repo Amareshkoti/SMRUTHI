@@ -11,5 +11,8 @@ parse-output.md
 server.log
 samples/_test_*
 
+# Local dev.sh / background-process bookkeeping, never meaningful across machines
+*.pid
+
 # Pitch deck stays local: this repo is public
 *.pptx

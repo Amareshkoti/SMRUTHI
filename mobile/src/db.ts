@@ -131,11 +131,12 @@ export async function listDocuments(): Promise<StoredDocument[]> {
 export async function listFacts(): Promise<Fact[]> {
   const db = await open();
   const rows = await db.getAllAsync<{
-    date: string; analyte: string; analyte_printed: string; value: number;
+    doc_id: string; date: string; analyte: string; analyte_printed: string; value: number;
     unit: string; ref_low: number | null; ref_high: number | null;
     doctor: string; hospital: string;
   }>('SELECT * FROM facts ORDER BY date ASC');
   return rows.map((r) => ({
+    docId: r.doc_id,
     date: r.date,
     analyte: r.analyte,
     analyteAsPrinted: r.analyte_printed,

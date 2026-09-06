@@ -1,58 +1,76 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
-import { c, font, space, THREAD, type } from '../theme';
+import { View, Text, StyleSheet, Pressable, ScrollView, Modal } from 'react-native';
+import { c, font, space, type } from '../theme';
 import type { Language } from '../api';
 
-export type Tab = 'timeline' | 'trends' | 'ask' | 'privacy';
+export type View5 = 'home' | 'signal' | 'memory' | 'ask' | 'vault';
 
-const TABS: { key: Tab; label: string }[] = [
-  { key: 'timeline', label: 'Memory' },
-  { key: 'trends', label: 'Patterns' },
+const NAV: { key: Exclude<View5, 'signal'>; label: string }[] = [
+  { key: 'home', label: 'Home' },
+  { key: 'memory', label: 'Memory' },
   { key: 'ask', label: 'Ask' },
-  { key: 'privacy', label: 'Yours' },
+  { key: 'vault', label: 'Yours' },
 ];
 
-export function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
+export function BottomNav({
+  active,
+  onChange,
+  onAdd,
+}: {
+  active: View5;
+  onChange: (v: View5) => void;
+  onAdd: () => void;
+}) {
   return (
-    <View style={styles.tabBar}>
-      {TABS.map((t) => {
-        const on = t.key === active;
-        return (
-          <Pressable
-            key={t.key}
-            onPress={() => onChange(t.key)}
-            style={styles.tab}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: on }}
-          >
-            <View style={[styles.tabMark, on && styles.tabMarkOn]} />
-            <Text style={[styles.tabLabel, on && styles.tabLabelOn]}>{t.label}</Text>
-          </Pressable>
-        );
-      })}
+    <View style={styles.nav}>
+      {NAV.slice(0, 2).map((t) => (
+        <NavItem key={t.key} label={t.label} on={active === t.key} onPress={() => onChange(t.key)} />
+      ))}
+      <Pressable onPress={onAdd} style={styles.plus} accessibilityRole="button" accessibilityLabel="Add a report">
+        <Text style={styles.plusLabel}>+</Text>
+      </Pressable>
+      {NAV.slice(2).map((t) => (
+        <NavItem key={t.key} label={t.label} on={active === t.key} onPress={() => onChange(t.key)} />
+      ))}
     </View>
   );
 }
 
-/** The thread: one continuous stroke running the height of the screen. */
-export function Screen({ title, subtitle, children }: {
-  title: string;
-  subtitle?: string;
-  children: React.ReactNode;
-}) {
+function NavItem({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={styles.navItem}
+      accessibilityRole="tab"
+      accessibilityState={{ selected: on }}
+    >
+      <View style={[styles.navMark, on && styles.navMarkOn]} />
+      <Text style={[styles.navLabel, on && styles.navLabelOn]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** Plain dark scroll container. Screens bring their own header. */
+export function Screen({ children }: { children: React.ReactNode }) {
   return (
     <ScrollView
       style={styles.screen}
       contentContainerStyle={styles.screenContent}
       keyboardShouldPersistTaps="handled"
     >
-      <View style={styles.thread} pointerEvents="none" />
-      <View style={styles.header}>
-        <Text style={type.hero}>{title}</Text>
-        {subtitle ? <Text style={[type.body, styles.subtitle]}>{subtitle}</Text> : null}
-      </View>
       {children}
     </ScrollView>
+  );
+}
+
+export function BackHeader({ onBack, label }: { onBack: () => void; label: string }) {
+  return (
+    <View style={styles.backRow}>
+      <Pressable onPress={onBack} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="Back">
+        <Text style={styles.backArrow}>←</Text>
+      </Pressable>
+      <Text style={type.label}>{label}</Text>
+    </View>
   );
 }
 
@@ -73,11 +91,11 @@ export function LanguagePicker({ value, onChange }: {
           <Pressable
             key={o.key}
             onPress={() => onChange(o.key)}
-            style={[styles.lang, on && styles.langOn]}
+            style={[styles.pill, on && styles.pillOn]}
             accessibilityRole="button"
             accessibilityState={{ selected: on }}
           >
-            <Text style={[styles.langText, on && styles.langTextOn]}>{o.label}</Text>
+            <Text style={[styles.pillText, on && styles.pillTextOn]}>{o.label}</Text>
           </Pressable>
         );
       })}
@@ -85,11 +103,11 @@ export function LanguagePicker({ value, onChange }: {
   );
 }
 
-export function Button({ label, onPress, disabled, tone = 'ink' }: {
+export function Button({ label, onPress, disabled, tone = 'gold' }: {
   label: string;
   onPress: () => void;
   disabled?: boolean;
-  tone?: 'ink' | 'quiet' | 'danger';
+  tone?: 'gold' | 'quiet' | 'dangerOutline' | 'dangerSolid';
 }) {
   return (
     <Pressable
@@ -99,7 +117,8 @@ export function Button({ label, onPress, disabled, tone = 'ink' }: {
       style={({ pressed }) => [
         styles.button,
         tone === 'quiet' && styles.buttonQuiet,
-        tone === 'danger' && styles.buttonDanger,
+        tone === 'dangerOutline' && styles.buttonDangerOutline,
+        tone === 'dangerSolid' && styles.buttonDangerSolid,
         (disabled || pressed) && styles.buttonDim,
       ]}
     >
@@ -107,6 +126,7 @@ export function Button({ label, onPress, disabled, tone = 'ink' }: {
         style={[
           styles.buttonLabel,
           tone === 'quiet' && styles.buttonLabelQuiet,
+          tone === 'dangerOutline' && styles.buttonLabelDangerOutline,
         ]}
       >
         {label}
@@ -123,56 +143,81 @@ export function Notice({ text, tone = 'info' }: { text: string; tone?: 'info' | 
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: c.paper },
-  screenContent: { paddingBottom: space(6) },
-  thread: {
-    position: 'absolute',
-    left: THREAD.x,
-    top: 0,
-    bottom: 0,
-    width: THREAD.width,
-    backgroundColor: THREAD.color,
-  },
-  header: { paddingHorizontal: space(2.5), paddingTop: space(3), paddingBottom: space(2.5), marginLeft: space(2) },
-  subtitle: { marginTop: space(1), maxWidth: 320 },
+/** Dim overlay + rounded-top slide-up panel, used by both bottom sheets. */
+export function Sheet({ open, onClose, children }: {
+  open: boolean;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Modal visible={open} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
+      <View style={styles.sheetOverlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+        <View style={styles.sheetPanel}>
+          <View style={styles.sheetHandle} />
+          {children}
+        </View>
+      </View>
+    </Modal>
+  );
+}
 
-  tabBar: {
-    flexDirection: 'row',
-    backgroundColor: c.surface,
-    borderTopWidth: 1,
-    borderTopColor: c.mist,
-    paddingBottom: space(1.5),
-    paddingTop: space(1),
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: c.ink },
+  screenContent: { paddingBottom: space(5) },
+
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: space(1.75), paddingHorizontal: space(3), paddingTop: space(1.25) },
+  backBtn: {
+    width: 34, height: 34, borderRadius: 17, borderWidth: 1, borderColor: c.hairSoft,
+    alignItems: 'center', justifyContent: 'center',
   },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: space(0.75) },
-  tabMark: { width: 20, height: 2, backgroundColor: 'transparent', marginBottom: space(0.75) },
-  tabMarkOn: { backgroundColor: c.ink },
-  tabLabel: { fontFamily: font.body, fontSize: 13, color: c.inkFaint },
-  tabLabelOn: { fontFamily: font.bodyMedium, color: c.ink },
+  backArrow: { color: c.textMuted, fontSize: 15 },
+
+  nav: {
+    flexDirection: 'row', alignItems: 'center', gap: space(1),
+    paddingHorizontal: space(2.5), paddingTop: space(1.25), paddingBottom: space(2.75),
+    backgroundColor: c.ink,
+  },
+  navItem: { flex: 1, alignItems: 'center', gap: 5, paddingVertical: space(1) },
+  navMark: { width: 16, height: 2, borderRadius: 2, backgroundColor: 'transparent' },
+  navMarkOn: { backgroundColor: c.gold },
+  navLabel: { fontFamily: font.bodyMedium, fontSize: 11, color: c.textFaint },
+  navLabelOn: { color: c.text },
+  plus: {
+    width: 52, height: 52, borderRadius: 26, backgroundColor: c.gold,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    shadowColor: c.gold, shadowOpacity: 0.35, shadowRadius: 12, shadowOffset: { width: 0, height: 6 },
+  },
+  plusLabel: { color: c.ink, fontSize: 24, fontFamily: font.bodySemibold, lineHeight: 26 },
 
   langRow: { flexDirection: 'row', gap: space(1) },
-  lang: {
-    paddingVertical: space(0.75),
-    paddingHorizontal: space(1.75),
-    borderWidth: 1,
-    borderColor: c.mist,
-    borderRadius: 999,
-    backgroundColor: c.surface,
+  pill: {
+    paddingVertical: space(0.875), paddingHorizontal: space(1.75),
+    borderWidth: 1, borderColor: c.hairSoft, borderRadius: 999, backgroundColor: 'transparent',
   },
-  langOn: { backgroundColor: c.ink, borderColor: c.ink },
-  langText: { fontFamily: font.body, fontSize: 15, color: c.inkSoft },
-  langTextOn: { fontFamily: font.bodyMedium, color: c.surface },
+  pillOn: { borderColor: c.gold, backgroundColor: c.goldWash },
+  pillText: { fontFamily: font.bodyMedium, fontSize: 13, color: c.textMuted },
+  pillTextOn: { color: c.gold },
 
-  button: { backgroundColor: c.ink, paddingVertical: space(1.75), paddingHorizontal: space(3), alignItems: 'center' },
-  buttonQuiet: { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.mist },
-  buttonDanger: { backgroundColor: c.kumkum },
+  button: { backgroundColor: c.gold, paddingVertical: space(1.875), paddingHorizontal: space(2.5), borderRadius: 12, alignItems: 'center' },
+  buttonQuiet: { backgroundColor: 'transparent', borderWidth: 1, borderColor: c.hairSoft },
+  buttonDangerOutline: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(217,124,116,.4)' },
+  buttonDangerSolid: { backgroundColor: c.rose },
   buttonDim: { opacity: 0.5 },
-  buttonLabel: { fontFamily: font.bodyMedium, fontSize: 16, color: c.surface },
-  buttonLabelQuiet: { color: c.inkSoft },
+  buttonLabel: { fontFamily: font.bodySemibold, fontSize: 15, color: c.ink },
+  buttonLabelQuiet: { color: c.textMuted },
+  buttonLabelDangerOutline: { color: c.rose },
 
-  notice: { backgroundColor: c.surface, borderLeftWidth: 3, borderLeftColor: c.mist, padding: space(2) },
-  noticeError: { borderLeftColor: c.kumkum },
-  noticeText: { ...type.body },
-  noticeTextError: { color: c.kumkum },
+  notice: { backgroundColor: 'rgba(127,195,165,.08)', borderWidth: 1, borderColor: 'rgba(127,195,165,.25)', borderRadius: 16, padding: space(2) },
+  noticeError: { backgroundColor: 'rgba(217,124,116,.08)', borderColor: 'rgba(217,124,116,.3)' },
+  noticeText: { fontFamily: font.body, fontSize: 13, lineHeight: 21, color: '#A9D8C4' },
+  noticeTextError: { color: c.rose },
+
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(6,8,10,.6)', justifyContent: 'flex-end' },
+  sheetPanel: {
+    backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: 'rgba(216,178,107,.25)',
+    borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: space(3),
+    paddingTop: space(2.75), paddingBottom: space(4.5),
+  },
+  sheetHandle: { width: 38, height: 4, borderRadius: 2, backgroundColor: c.hairSoft, alignSelf: 'center', marginBottom: space(2.5) },
 });

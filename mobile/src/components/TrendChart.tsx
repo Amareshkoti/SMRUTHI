@@ -1,119 +1,82 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
-import { c, font, type } from '../theme';
+import Svg, { Circle, Defs, Line, LinearGradient, Path, Rect, Stop, Text as SvgText } from 'react-native-svg';
+import { c, font } from '../theme';
+import { chartGeom } from '../chartGeom';
+import { REFS, THRESHOLDS, THR_SHORT, yearsToThreshold } from '../insightDisplay';
 import type { Insight } from '../api';
 
 /**
- * The thread from the timeline, turned on its side.
- *
- * Every point is drawn in ink, not in a warning colour, because every one of
- * these readings genuinely was normal on the day it was taken. The only red on
- * this chart is the clinical threshold line -- which the series is approaching
- * but has not crossed. That gap is the entire argument.
+ * The full Signal-screen chart: printed-normal-range band, the clinical
+ * threshold line, an area fill under the series, a dashed projection toward
+ * the threshold when the trend is heading that way, and a cursor line for
+ * whichever year is selected.
  */
-export function TrendChart({ insight, threshold }: { insight: Insight; threshold?: number }) {
-  const W = 320;
-  const H = 190;
-  const padL = 40;
-  const padR = 16;
-  const padT = 18;
-  const padB = 34;
+export function SignalChart({ insight, selectedIndex }: { insight: Insight; selectedIndex: number }) {
+  const threshold = THRESHOLDS[insight.analyte];
+  const band = REFS[insight.analyte] ?? null;
+  const thrLabel = THR_SHORT[insight.analyte] ?? '';
+  const years = yearsToThreshold(insight.lastValue, insight.slopePerYear, threshold);
+  const extraSpan = years !== null && years > 0 ? Math.min(1.6, years + 0.4) : 0;
 
   const values = insight.points.map((p) => p.value);
-  const candidates = threshold ? [...values, threshold] : values;
-  const lo = Math.min(...candidates);
-  const hi = Math.max(...candidates);
-  const pad = (hi - lo) * 0.25 || 0.5;
-  const yMin = lo - pad;
-  const yMax = hi + pad;
+  const g = chartGeom(values, { threshold, band, extraSpan });
 
-  const x = (i: number) =>
-    padL + (i * (W - padL - padR)) / Math.max(1, insight.points.length - 1);
-  const y = (v: number) => padT + ((yMax - v) / (yMax - yMin)) * (H - padT - padB);
+  const i = Math.min(selectedIndex, g.pts.length - 1);
+  const cursorX = g.pts[i]?.cx ?? g.pts[g.pts.length - 1]!.cx;
 
-  const path = insight.points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${x(i)} ${y(p.value)}`).join(' ');
+  let projPath: string | null = null;
+  if (extraSpan > 0 && years !== null) {
+    const last = g.pts[g.pts.length - 1]!;
+    const projX = g.X(values.length - 1 + years);
+    projPath = `M ${last.cx.toFixed(1)} ${last.cy.toFixed(1)} L ${projX.toFixed(1)} ${g.thrY.toFixed(1)}`;
+  }
 
   return (
-    <View>
-      <Svg width={W} height={H}>
-        {[yMin, (yMin + yMax) / 2, yMax].map((v, i) => (
-          <Line key={i} x1={padL} y1={y(v)} x2={W - padR} y2={y(v)} stroke={c.mist} strokeWidth={1} />
-        ))}
-        {[yMax, yMin].map((v, i) => (
-          <SvgText
-            key={i}
-            x={padL - 8}
-            y={y(v) + 4}
-            fontSize={11}
-            fill={c.inkFaint}
-            textAnchor="end"
-            fontFamily={font.body}
-          >
-            {v.toFixed(1)}
+    <Svg width={g.w} height={g.h}>
+      <Defs>
+        <LinearGradient id="smrFill" x1="0" y1="0" x2="0" y2="1">
+          <Stop offset="0%" stopColor={c.gold} stopOpacity={0.22} />
+          <Stop offset="100%" stopColor={c.gold} stopOpacity={0} />
+        </LinearGradient>
+      </Defs>
+
+      {g.band ? (
+        <>
+          <Rect x={g.band.x} y={g.band.y} width={g.band.w} height={g.band.h} fill={c.mint} opacity={0.07} />
+          <SvgText x={g.band.x + 26} y={g.band.y + g.band.h - 8} fontSize={10} fontFamily={font.body} fill={c.mint} opacity={0.85}>
+            printed normal range
           </SvgText>
-        ))}
+        </>
+      ) : null}
 
-        {threshold !== undefined && threshold <= yMax && (
-          <>
-            <Line
-              x1={padL}
-              y1={y(threshold)}
-              x2={W - padR}
-              y2={y(threshold)}
-              stroke={c.kumkum}
-              strokeWidth={1.5}
-              strokeDasharray="5 4"
-            />
-            <SvgText
-              x={W - padR}
-              y={y(threshold) - 7}
-              fontSize={11}
-              fill={c.kumkum}
-              textAnchor="end"
-              fontFamily={font.body}
-            >
-              {`danger line ${threshold}`}
-            </SvgText>
-          </>
-        )}
+      {threshold !== undefined ? (
+        <>
+          <Line x1={0} y1={g.thrY} x2={g.w} y2={g.thrY} stroke={c.rose} strokeWidth={1} strokeDasharray="4 5" />
+          <SvgText x={g.w - 16} y={g.thrY - 8} fontSize={10} fontFamily={font.body} fill={c.rose} textAnchor="end">
+            {thrLabel}
+          </SvgText>
+        </>
+      ) : null}
 
-        <Path d={path} stroke={c.ink} strokeWidth={2} fill="none" />
+      <Path d={g.area} fill="url(#smrFill)" />
 
-        {insight.points.map((p, i) => (
-          <React.Fragment key={p.date}>
-            <Circle cx={x(i)} cy={y(p.value)} r={5} fill={c.surface} stroke={c.ink} strokeWidth={2} />
-            <SvgText
-              x={x(i)}
-              y={H - 14}
-              fontSize={11}
-              fill={c.inkFaint}
-              textAnchor="middle"
-              fontFamily={font.body}
-            >
-              {p.date.slice(0, 4)}
-            </SvgText>
-            <SvgText
-              x={x(i)}
-              y={y(p.value) - 12}
-              fontSize={12}
-              fill={c.ink}
-              textAnchor="middle"
-              fontFamily={font.bodyMedium}
-            >
-              {String(p.value)}
-            </SvgText>
-          </React.Fragment>
-        ))}
-      </Svg>
-      <Text style={styles.caption}>
-        {insight.points.length} reports, {insight.points.map((p) => p.hospital).filter(Boolean).length}{' '}
-        different labs. Each one read normal on its own day.
-      </Text>
-    </View>
+      {projPath ? <Path d={projPath} stroke={c.rose} strokeWidth={1.5} strokeDasharray="2 5" fill="none" opacity={0.8} /> : null}
+
+      <Path d={g.path} stroke={c.gold} strokeWidth={2} fill="none" strokeLinejoin="round" />
+
+      {g.pts.map((p, k) => (
+        <Circle
+          key={k}
+          cx={p.cx}
+          cy={p.cy}
+          r={k === i ? 6 : 4}
+          fill={c.ink}
+          stroke={k === i ? c.gold : 'rgba(216,178,107,.45)'}
+          strokeWidth={2}
+        />
+      ))}
+
+      <Line x1={cursorX} y1={18} x2={cursorX} y2={g.base + 8} stroke="rgba(255,255,255,.16)" strokeWidth={1} />
+    </Svg>
   );
 }
-
-const styles = StyleSheet.create({
-  caption: { ...type.small, marginTop: 4, marginLeft: 40 },
-});

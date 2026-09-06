@@ -27,6 +27,8 @@ export interface Fact {
   refHigh: number | null;
   doctor: string;
   hospital: string;
+  /** Local-only: which stored document this came from. Never sent by the server. */
+  docId?: string;
 }
 
 export interface TrendPoint {
