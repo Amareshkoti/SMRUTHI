@@ -39,6 +39,8 @@ Rules:
 - Skip any row whose value is not numeric (comments, qualitative results).
 - If the page is not a medical report, return facts as an empty array.`;
 
+const ATTEMPTS = 3;
+
 export async function extractFacts(markdown: string): Promise<Extraction> {
   const ask = (extraNote?: string) =>
     chat({
@@ -53,26 +55,44 @@ export async function extractFacts(markdown: string): Promise<Extraction> {
         },
       ],
       temperature: 0,
-      maxTokens: 4096,
+      // A full-body checkup can print 40-60 rows; each one costs ~80-120
+      // tokens of JSON, so a low ceiling here truncates the object mid-way
+      // and every truncated reply fails JSON.parse outright.
+      maxTokens: 8192,
     });
 
   let lastError = '';
-  // Two attempts: a schema violation is fed back so the model can correct it.
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let lastRaw = '';
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
     const raw = await ask(attempt === 0 ? undefined : lastError);
-    const parsed = ExtractionSchema.safeParse(safeJson(extractJsonBlock(raw)));
+    lastRaw = raw;
+    const json = safeJson(extractJsonBlock(raw));
+    const parsed = ExtractionSchema.safeParse(json);
     if (parsed.success) return normaliseExtraction(parsed.data);
-    lastError = parsed.error.issues
-      .slice(0, 6)
-      .map((i) => `${i.path.join('.')}: ${i.message}`)
-      .join('; ');
+    lastError =
+      json === null
+        ? 'Reply was not valid JSON.'
+        : parsed.error.issues
+            .slice(0, 6)
+            .map((i) => `${i.path.join('.')}: ${i.message}`)
+            .join('; ');
   }
-  throw new Error(`Extraction did not produce valid JSON after 2 attempts. Last error: ${lastError}`);
+  console.error(
+    `[extract] gave up after ${ATTEMPTS} attempts (${lastError}). Last raw reply (first 800 chars):\n` +
+      lastRaw.slice(0, 800),
+  );
+  throw new Error(`Extraction did not produce valid JSON after ${ATTEMPTS} attempts. Last error: ${lastError}`);
 }
 
+/** Tries the reply as-is, then again after fixing the trailing-comma slip models make near a truncation boundary. */
 function safeJson(s: string): unknown {
   try {
     return JSON.parse(s);
+  } catch {
+    // no-op, try the repaired version below
+  }
+  try {
+    return JSON.parse(s.replace(/,(\s*[}\]])/g, '$1'));
   } catch {
     return null;
   }
