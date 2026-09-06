@@ -10,3 +10,6 @@ demo-facts.json
 parse-output.md
 server.log
 samples/_test_*
+
+# Pitch deck stays local: this repo is public
+*.pptx
