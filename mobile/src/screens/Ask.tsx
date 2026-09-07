@@ -91,11 +91,16 @@ export function AskScreen({
   async function removeChat() {
     if (!activeChatId) return;
     try {
-      const next = chats.filter(c => c.id !== activeChatId);
+      const remaining = chats.filter(c => c.id !== activeChatId);
+      // Never leave activeChatId null -- ask() no-ops without one, and that
+      // silence looked like the app had stopped working until it was reopened.
+      const now = new Date().toISOString();
+      const next = remaining.length ? remaining : [{ id: `${Date.now()}`, title: 'New chat', createdAt: now, updatedAt: now, messages: [] }];
       await saveLocalChats(userId, next);
       setChats(next);
-      setActiveChatId(next[0]?.id ?? null);
-      setMessages([]);
+      setActiveChatId(next[0]!.id);
+      setMessages(next[0]!.messages);
+      setError(null);
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not delete this chat.'); }
   }
 

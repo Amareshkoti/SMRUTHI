@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { File } from 'expo-file-system';
+// The new File class only understands plain file:// paths -- some pickers
+// (Google Drive, Photos) hand back a content:// URI even after
+// copyToCacheDirectory, and reading one throws "Missing READ permission".
+// The legacy API goes through Android's ContentResolver and handles both.
+import { EncodingType, readAsStringAsync } from 'expo-file-system/legacy';
 import { c, font, space } from '../theme';
 import { Sheet, Button, Notice } from './Chrome';
 import { api } from '../api';
@@ -29,7 +33,7 @@ interface Picked {
 
 async function readFileBase64(uri: string): Promise<string> {
   if (Platform.OS !== 'web') {
-    return new File(uri).base64();
+    return readAsStringAsync(uri, { encoding: EncodingType.Base64 });
   }
 
   // expo-file-system's File class is native-only. On web, document-picker
@@ -83,9 +87,14 @@ export function AddReportSheet({
   async function pick() {
     setError(null);
     try {
+      // copyToCacheDirectory has a race on some devices/providers where the
+      // copy is still being flushed when we get the result back, so the
+      // cache file reads as unreadable moments later. Read the picker's own
+      // content:// URI instead -- the legacy file-system API goes through
+      // Android's ContentResolver and needs no local copy at all.
       const res = await DocumentPicker.getDocumentAsync({
         type: ACCEPTED,
-        copyToCacheDirectory: true,
+        copyToCacheDirectory: false,
         multiple: false,
       });
       if (res.canceled) return;

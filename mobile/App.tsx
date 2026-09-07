@@ -168,13 +168,14 @@ export default function App() {
       <StatusBar barStyle="light-content" backgroundColor={c.ink} />
       {/*
         Android is edge-to-edge from SDK 54 on, so the window no longer shrinks
-        for the keyboard by itself -- without this, anything pinned to the
-        bottom (the Ask composer) ends up underneath it. Expo's guidance: give
-        iOS "padding", and on Android the component alone is enough.
+        for the keyboard by itself -- without a "behavior", KeyboardAvoidingView
+        does nothing at all on Android, and anything pinned to the bottom (the
+        Ask composer) ends up underneath the keyboard. "height" is the manual
+        replacement for the resize the OS used to do for us.
       */}
       <KeyboardAvoidingView
         style={styles.body}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       >
         <View style={styles.body}>
           {view === 'home' && (
