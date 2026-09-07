@@ -16,13 +16,16 @@ function defaultBase(): string {
   const hostUri = Constants.expoConfig?.hostUri ?? Constants.expoGoConfig?.debuggerHost ?? '';
   const port = process.env.EXPO_PUBLIC_API_PORT ?? String(DEFAULT_API_PORT);
   const host = hostUri ? new URL(`http://${hostUri}`).hostname : (typeof window !== 'undefined' ? window.location.hostname : '');
-  if (!host && !__DEV__) throw new Error('EXPO_PUBLIC_SMRUTI_API is required in this build.');
-  return `http://${host || 'localhost'}:${port}`;
+  // A production APK has no Metro debugger host. Leave the address empty so
+  // the app can still open and authenticate; API actions show a clear setup
+  // error instead of crashing during module initialization.
+  return host ? `http://${host}:${port}` : '';
 }
 
 export const API_BASE = defaultBase();
 
 async function post<T>(path: string, body: unknown, timeoutMs = 300_000): Promise<T> {
+  if (!API_BASE) throw new Error('The app server is not configured for this build. Set EXPO_PUBLIC_SMRUTI_API and rebuild the app.');
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -58,6 +61,7 @@ async function post<T>(path: string, body: unknown, timeoutMs = 300_000): Promis
 
 export const api = {
   health: async () => {
+    if (!API_BASE) throw new Error('The app server is not configured for this build.');
     const res = await fetch(`${API_BASE}/api/health`);
     return res.json() as Promise<{ ok: boolean; mock: boolean }>;
   },
