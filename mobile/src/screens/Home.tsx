@@ -1,11 +1,10 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { c, font, space, type } from '../theme';
 import { Screen, LanguagePicker } from '../components/Chrome';
-import { RingProgress } from '../components/RingProgress';
 import { Sparkline } from '../components/Sparkline';
-import { THRESHOLDS, yearsToThreshold, fmt } from '../insightDisplay';
-import type { Fact, Insight, Language } from '../api';
+import { fmt } from '../insightDisplay';
+import { formatWarning, isSafeWarningMessage, type Fact, type Insight, type Language } from '../api';
 import type { StoredDocument } from '../db';
 
 export function HomeScreen({
@@ -29,6 +28,7 @@ export function HomeScreen({
   onOpenSignal: (analyte: string) => void;
   onOpenVault: () => void;
 }) {
+  const [showOtherTrends, setShowOtherTrends] = useState(false);
   const top = warning?.insight ?? null;
   const watch = !top ? insights.find((i) => i.severity === 'info') ?? null : null;
   const empty = documents.length === 0;
@@ -39,9 +39,8 @@ export function HomeScreen({
 
   const labCount = new Set(documents.map((d) => d.hospital)).size;
 
-  const topYears = top ? yearsToThreshold(top.lastValue, top.slopePerYear, THRESHOLDS[top.analyte]) : null;
-
-  const others = insights.filter((i) => !top || i.analyte !== top.analyte);
+  const primary = top ?? watch;
+  const others = insights.filter((i) => !primary || i.analyte !== primary.analyte);
 
   return (
     <Screen>
@@ -62,8 +61,45 @@ export function HomeScreen({
               <View style={styles.pulseDot} />
               <Text style={styles.findingLabel}>FINDING · COMPUTED ON DEVICE</Text>
             </View>
-            <RingProgress years={topYears} />
+            <View style={styles.findingHeadRight}>
+              {others.length > 0 ? (
+                <Pressable
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    setShowOtherTrends((visible) => !visible);
+                  }}
+                  style={styles.moreTrendsButton}
+                  accessibilityRole="button"
+                  accessibilityLabel="View other trends"
+                >
+                  <Text style={styles.moreTrendsText}>{showOtherTrends ? 'Hide' : `+${others.length}`}</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
+
+          {showOtherTrends ? (
+            <View style={styles.otherTrendsMenu}>
+              {others.map((other) => (
+                <Pressable
+                  key={other.analyte}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    onOpenSignal(other.analyte);
+                  }}
+                  style={styles.otherTrendMenuRow}
+                >
+                  <View style={styles.otherTrendMenuCopy}>
+                    <Text style={styles.otherTrendMenuName}>{other.analyte}</Text>
+                    <Text style={styles.otherTrendMenuMeta}>
+                      {other.direction === 'rising' ? 'Rising' : 'Falling'} · {other.lastValue} {other.unit}
+                    </Text>
+                  </View>
+                  <Text style={styles.otherTrendMenuArrow}>→</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
 
           <View style={styles.findingValueRow}>
             <Text style={styles.findingFirst}>{top.firstValue}</Text>
@@ -78,7 +114,7 @@ export function HomeScreen({
           </Text>
 
           <Text style={styles.findingMessage}>
-            {phrasing ? 'Putting this in your language…' : (warning?.message ?? top.statement)}
+            {phrasing ? 'Putting this in your language…' : (warning?.message && isSafeWarningMessage(warning.message) ? warning.message : formatWarning(top))}
           </Text>
 
           <View style={styles.langRow}>
@@ -92,7 +128,14 @@ export function HomeScreen({
         </Pressable>
       ) : watch ? (
         <View style={styles.watchCard}>
-          <Text style={styles.watchLabel}>WATCHING</Text>
+          <View style={styles.watchHead}>
+            <Text style={styles.watchLabel}>WATCHING</Text>
+            {others.length > 0 ? (
+              <Pressable onPress={() => setShowOtherTrends((visible) => !visible)} style={styles.moreTrendsButton} accessibilityRole="button" accessibilityLabel="View other trends">
+                <Text style={styles.moreTrendsText}>{showOtherTrends ? 'Hide' : `+${others.length}`}</Text>
+              </Pressable>
+            ) : null}
+          </View>
           <Text style={styles.watchText}>
             {watch.analyte} has moved from {watch.firstValue} to {watch.lastValue} {watch.unit} across{' '}
             {watch.points.length} reports, one direction only.
@@ -100,6 +143,19 @@ export function HomeScreen({
           <Text style={styles.watchCaption}>
             Three points is the minimum this app will trust. Add the years you are missing.
           </Text>
+          {showOtherTrends ? (
+            <View style={styles.otherTrendsMenu}>
+              {others.map((other) => (
+                <Pressable key={other.analyte} onPress={() => onOpenSignal(other.analyte)} style={styles.otherTrendMenuRow}>
+                  <View style={styles.otherTrendMenuCopy}>
+                    <Text style={styles.otherTrendMenuName}>{other.analyte}</Text>
+                    <Text style={styles.otherTrendMenuMeta}>{other.direction === 'rising' ? 'Rising' : 'Falling'} · {other.lastValue} {other.unit}</Text>
+                  </View>
+                  <Text style={styles.otherTrendMenuArrow}>→</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
         </View>
       ) : empty ? (
         <View style={styles.emptyCard}>
@@ -121,8 +177,8 @@ export function HomeScreen({
           <Text style={styles.sectionLabel}>EVERYTHING ELSE MOVING</Text>
           <View style={styles.othersList}>
             {others.map((o) => {
-              const threshold = THRESHOLDS[o.analyte];
-              const crossed = threshold !== undefined && o.lastValue >= threshold;
+              const latestStatus = o.points[o.points.length - 1]?.rangeStatus;
+              const crossed = latestStatus === 'above' || latestStatus === 'below';
               const color = crossed ? c.rose : o.severity === 'none' ? c.mint : c.textMuted;
               return (
                 <Pressable key={o.analyte} onPress={() => onOpenSignal(o.analyte)} style={styles.otherRow}>
@@ -166,8 +222,18 @@ const styles = StyleSheet.create({
   },
   findingHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   findingHeadLeft: { flexDirection: 'row', alignItems: 'center', gap: space(1) },
+  findingHeadRight: { flexDirection: 'row', alignItems: 'center', gap: space(1.25) },
   pulseDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.gold },
   findingLabel: { fontFamily: font.bodySemibold, fontSize: 10, letterSpacing: 1.6, color: c.gold },
+  moreTrendsButton: { minWidth: 30, height: 26, paddingHorizontal: 8, borderRadius: 13, borderWidth: 1, borderColor: 'rgba(216,178,107,.45)', alignItems: 'center', justifyContent: 'center' },
+  moreTrendsText: { fontFamily: font.bodySemibold, fontSize: 11, color: c.gold },
+
+  otherTrendsMenu: { marginTop: space(1.75), borderTopWidth: 1, borderTopColor: 'rgba(216,178,107,.16)', paddingTop: space(1) },
+  otherTrendMenuRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: space(1), borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,.06)' },
+  otherTrendMenuCopy: { flex: 1 },
+  otherTrendMenuName: { fontFamily: font.bodyMedium, fontSize: 13, color: c.text },
+  otherTrendMenuMeta: { fontFamily: font.body, fontSize: 11, color: c.textFaint, marginTop: 2 },
+  otherTrendMenuArrow: { fontFamily: font.body, fontSize: 16, color: c.gold, paddingLeft: space(1) },
 
   findingValueRow: { flexDirection: 'row', alignItems: 'baseline', gap: space(1.5), marginTop: space(2.5) },
   findingFirst: { fontFamily: font.displayRegular, fontSize: 24, color: '#8B8577' },
@@ -176,7 +242,6 @@ const styles = StyleSheet.create({
   findingUnit: { fontFamily: font.body, fontSize: 18, color: c.gold },
   findingSub: { fontFamily: font.body, fontSize: 12, color: c.textFaint, marginTop: space(0.75) },
   findingMessage: { fontFamily: font.body, fontSize: 15, lineHeight: 25, color: c.textSoft, marginTop: space(2.25) },
-
   langRow: { marginTop: space(2.25) },
 
   findingFooter: {
@@ -187,6 +252,7 @@ const styles = StyleSheet.create({
   findingFooterArrow: { fontFamily: font.body, fontSize: 16, color: c.gold },
 
   watchCard: { marginTop: space(3.25), marginHorizontal: space(3), borderRadius: 22, padding: space(2.75), backgroundColor: c.surface, borderWidth: 1, borderColor: c.hair },
+  watchHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   watchLabel: { fontFamily: font.bodySemibold, fontSize: 10, letterSpacing: 1.6, color: c.mint },
   watchText: { fontFamily: font.displayRegular, fontSize: 20, lineHeight: 30, color: c.text, marginTop: space(1.5) },
   watchCaption: { fontFamily: font.body, fontSize: 13, lineHeight: 21, color: c.textFaint, marginTop: space(1.5) },

@@ -1,4 +1,9 @@
 import Constants from 'expo-constants';
+import type { Fact, Insight, IngestedDocument, Language, ChatTurn } from '../../shared/contracts';
+export type { Fact, Insight, IngestedDocument, Language, ChatTurn, TrendPoint } from '../../shared/contracts';
+export { formatWarning, isSafeWarningMessage } from '../../shared/messages';
+import { DEFAULT_API_PORT, MAX_HISTORY } from '../../shared/contracts';
+import { accessToken } from './supabase';
 
 /**
  * The phone cannot reach "localhost" -- that is the phone itself. Expo already
@@ -7,76 +12,35 @@ import Constants from 'expo-constants';
  */
 function defaultBase(): string {
   const override = process.env.EXPO_PUBLIC_SMRUTI_API;
-  if (override) return override;
+  if (override) return override.replace(/\/+$/, '');
   const hostUri = Constants.expoConfig?.hostUri ?? Constants.expoGoConfig?.debuggerHost ?? '';
-  const host = hostUri.split(':')[0];
-  return host ? `http://${host}:8787` : 'http://localhost:8787';
+  const port = process.env.EXPO_PUBLIC_API_PORT ?? String(DEFAULT_API_PORT);
+  const host = hostUri ? new URL(`http://${hostUri}`).hostname : (typeof window !== 'undefined' ? window.location.hostname : '');
+  if (!host && !__DEV__) throw new Error('EXPO_PUBLIC_SMRUTI_API is required in this build.');
+  return `http://${host || 'localhost'}:${port}`;
 }
 
 export const API_BASE = defaultBase();
-
-export type Language = 'en' | 'hi' | 'te';
-
-export interface Fact {
-  date: string;
-  analyte: string;
-  analyteAsPrinted: string;
-  value: number;
-  unit: string;
-  refLow: number | null;
-  refHigh: number | null;
-  doctor: string;
-  hospital: string;
-  /** Local-only: which stored document this came from. Never sent by the server. */
-  docId?: string;
-}
-
-export interface TrendPoint {
-  date: string;
-  value: number;
-  unit: string;
-  hospital: string;
-  normalOnItsOwnReport: boolean;
-}
-
-export interface Insight {
-  analyte: string;
-  unit: string;
-  severity: 'none' | 'info' | 'warning';
-  direction: 'rising' | 'falling' | 'flat';
-  points: TrendPoint[];
-  slopePerYear: number;
-  firstValue: number;
-  lastValue: number;
-  spanYears: number;
-  everyReportLookedNormal: boolean;
-  band: string | null;
-  statement: string;
-}
-
-export interface IngestedDocument {
-  documentTitle: string;
-  documentDate: string;
-  hospital: string;
-  doctor: string;
-  facts: Fact[];
-  sourceId: string;
-  sourceName: string;
-  pages: number;
-  ms: number;
-}
 
 async function post<T>(path: string, body: unknown, timeoutMs = 300_000): Promise<T> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
+    // Every model-backed route is behind a signed-in user: these calls spend
+    // real credits, and an open endpoint is someone else's free GPU.
+    const token = await accessToken();
     const res = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(body),
       signal: ac.signal,
     });
-    const json = (await res.json()) as T & { error?: string };
+    const raw = await res.text();
+    let json: T & { error?: string };
+    try { json = JSON.parse(raw); } catch { throw new Error(`The server returned an unreadable response (HTTP ${res.status}).`); }
     if (!res.ok) throw new Error(json.error ?? `Request failed (${res.status})`);
     return json;
   } catch (err) {
@@ -95,12 +59,17 @@ async function post<T>(path: string, body: unknown, timeoutMs = 300_000): Promis
 export const api = {
   health: async () => {
     const res = await fetch(`${API_BASE}/api/health`);
-    return res.json() as Promise<{ ok: boolean; mock: boolean; keyConfigured: boolean }>;
+    return res.json() as Promise<{ ok: boolean; mock: boolean }>;
   },
-  ingest: (link: string) => post<{ documents: IngestedDocument[]; factCount: number }>('/api/ingest', { link }),
+  /**
+   * The file's bytes, base64'd. They are read once on the server and dropped --
+   * there is no bucket and nothing is written to disk.
+   */
+  ingest: (file: { fileBase64: string; mimeType: string; name: string }) =>
+    post<{ documents: IngestedDocument[]; factCount: number }>('/api/ingest', file),
   insights: (facts: Fact[]) => post<{ insights: Insight[] }>('/api/insights', { facts }, 20_000),
   warning: (facts: Fact[], language: Language) =>
     post<{ insight: Insight | null; message: string | null }>('/api/warning', { facts, language }),
-  ask: (question: string, facts: Fact[], language: Language) =>
-    post<{ answer: string; insights: Insight[] }>('/api/ask', { question, facts, language }),
+  ask: (question: string, facts: Fact[], language: Language, history: ChatTurn[] = []) =>
+    post<{ answer: string; insights: Insight[] }>('/api/ask', { question, facts, language, history: history.slice(-MAX_HISTORY) }),
 };

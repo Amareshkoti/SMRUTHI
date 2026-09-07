@@ -20,15 +20,13 @@ export interface ChartGeom {
   path: string;
   area: string;
   pts: ChartPoint[];
-  thrY: number;
   band: ChartBand | null;
 }
 
 /**
  * Lays out a value series onto an SVG-shaped rectangle: least-squares-friendly
- * padding around the value range, plus optional threshold line and reference
- * band. Same layout math the design canvas used, just typed and reusable for
- * both the full Signal chart and the small Home sparklines.
+ * padding around the value range and an optional report-provided reference
+ * band. Same layout math is reusable for the full chart and sparklines.
  */
 export function chartGeom(
   values: number[],
@@ -39,9 +37,7 @@ export function chartGeom(
     padR?: number;
     padT?: number;
     padB?: number;
-    threshold?: number;
     band?: [number | null, number | null] | null;
-    extraSpan?: number;
   } = {},
 ): ChartGeom {
   const w = opts.w ?? 390;
@@ -52,7 +48,6 @@ export function chartGeom(
   const padB = opts.padB ?? 42;
 
   const candidates = [...values];
-  if (opts.threshold !== undefined) candidates.push(opts.threshold);
   if (opts.band && opts.band[0] !== null) candidates.push(opts.band[0]);
   if (opts.band && opts.band[1] !== null) candidates.push(opts.band[1]);
 
@@ -62,7 +57,7 @@ export function chartGeom(
   const yMin = lo - pad;
   const yMax = hi + pad;
 
-  const span = Math.max(1, values.length - 1 + (opts.extraSpan ?? 0));
+  const span = Math.max(1, values.length - 1);
   const X = (i: number) => padL + (i * (w - padL - padR)) / span;
   const Y = (v: number) => padT + ((yMax - v) / (yMax - yMin)) * (h - padT - padB);
   const base = h - padB;
@@ -87,7 +82,6 @@ export function chartGeom(
     path,
     area,
     pts,
-    thrY: opts.threshold !== undefined ? Y(opts.threshold) : -10,
     band,
   };
 }

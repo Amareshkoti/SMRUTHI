@@ -80,6 +80,7 @@ export async function parseDocumentImage(
 function toResult(body: string): ParseResult {
   const json = JSON.parse(body) as {
     choices?: {
+      finish_reason?: string;
       message?: {
         content?: string | null;
         tool_calls?: { function?: { arguments?: string } }[];
@@ -87,6 +88,7 @@ function toResult(body: string): ParseResult {
     }[];
   };
   const msg = json.choices?.[0]?.message;
+  if (json.choices?.[0]?.finish_reason === 'length') throw new Error('The page text was truncated. Try a smaller report page.');
   const args = msg?.tool_calls?.[0]?.function?.arguments;
 
   if (!args) {
@@ -104,9 +106,10 @@ function toResult(body: string): ParseResult {
     bbox?: ParsedBlock['bbox'];
   }[];
 
+  if (!Array.isArray(flat)) throw new Error('The document reader returned invalid blocks.');
   const blocks: ParsedBlock[] = flat
     .filter((b) => typeof b?.text === 'string' && b.text.trim() !== '')
-    .map((b) => ({ text: b.text!.trim(), type: b.type ?? 'Text', bbox: b.bbox ?? null }));
+    .map((b) => ({ text: b.text!.trim(), type: typeof b.type === 'string' ? b.type : 'Text', bbox: b.bbox ?? null }));
 
   return { blocks, markdown: blocksToMarkdown(blocks) };
 }

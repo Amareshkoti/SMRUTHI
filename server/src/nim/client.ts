@@ -21,7 +21,7 @@ export class NimError extends Error {
     readonly model: string,
     readonly body: string,
   ) {
-    super(`NIM ${model} -> HTTP ${status}: ${body.slice(0, 300)}`);
+    super(`Model service returned HTTP ${status}`);
     this.name = 'NimError';
   }
 }
@@ -53,12 +53,25 @@ export async function chat(opts: ChatOptions): Promise<string> {
     const text = await res.text();
     if (!res.ok) throw new NimError(res.status, opts.model, text);
     const json = JSON.parse(text) as {
-      choices?: { message?: { content?: string } }[];
+      choices?: { finish_reason?: string; message?: { content?: string } }[];
     };
-    return json.choices?.[0]?.message?.content ?? '';
+    const choice = json.choices?.[0];
+    if (!choice || choice.finish_reason === 'length' || choice.finish_reason === 'content_filter') {
+      throw new Error('The model did not return a complete answer. Please retry.');
+    }
+    return finalContent(choice.message?.content);
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function finalContent(raw: unknown): string {
+  if (typeof raw !== 'string') throw new Error('The model did not return a final answer.');
+  const final = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  if (!final || /<\|(?:analysis|assistant|system|user)[^>]*\|>/i.test(final)) {
+    throw new Error('The model did not return a usable final answer. Please retry.');
+  }
+  return final;
 }
 
 /** Strip ```json fences and any prose a model wrapped around its JSON. */

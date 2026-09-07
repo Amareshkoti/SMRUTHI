@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, Modal } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Modal, Keyboard } from 'react-native';
 import { c, font, space, type } from '../theme';
 import type { Language } from '../api';
 
@@ -48,6 +48,23 @@ function NavItem({ label, on, onPress }: { label: string; on: boolean; onPress: 
       <Text style={[styles.navLabel, on && styles.navLabelOn]}>{label}</Text>
     </Pressable>
   );
+}
+
+/**
+ * True while the software keyboard is on screen. Used to stand the bottom nav
+ * down, so a composer pinned above the keyboard is not floating on top of it.
+ */
+export function useKeyboardVisible(): boolean {
+  const [visible, setVisible] = React.useState(false);
+  React.useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', () => setVisible(true));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setVisible(false));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return visible;
 }
 
 /** Plain dark scroll container. Screens bring their own header. */

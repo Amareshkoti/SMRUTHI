@@ -10,6 +10,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.smruti.app",
       "adaptiveIcon": {
         "backgroundColor": "#0B0E11",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -31,6 +32,12 @@
     "splash": {
       "backgroundColor": "#0B0E11",
       "resizeMode": "contain"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3baa1f8a-d103-4d32-b55f-a4888bbe5b4a"
+      }
+    },
+    "owner": "temporaryyyyyy"
   }
 }

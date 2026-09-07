@@ -9,16 +9,16 @@ Built for Smart India Hackathon. React Native (Expo) app, Node extraction server
 
 ## What it does
 
-You paste a Google Drive link to a medical report. SMRUTI reads it, pulls out the numbers that
-matter, and forgets the file. Once several reports are in, it shows you the shape of the years —
-and raises the warning that no single report could.
+You sign in, then pick a medical report from your phone — a PDF or a photo. SMRUTI reads it,
+pulls out the numbers that matter, and forgets the file. Once several reports are in, it shows
+you the shape of the years — and raises the warning that no single report could.
 
 | Screen | What it does |
 |---|---|
-| **Memory** | Add a report from a Drive link. See every report you have added, on a timeline. |
+| **Memory** | Add a report from your phone. See every report you have added, on a timeline. |
 | **Patterns** | Charts each measurement across years. Raises an early warning when a series drifts. |
 | **Ask** | Ask anything about your own reports, in English, Hindi or Telugu. |
-| **Yours** | What is stored, where, and a button that erases all of it. |
+| **Yours** | What is stored, where, who you are signed in as, and a button that erases all of it. |
 
 ---
 
@@ -55,8 +55,8 @@ host, so the wrong value breaks the bundle download *and* every server call.
 
 ### 3. Try it
 
-Upload a file from `samples/` to your Drive, set it to **Anyone with the link**,
-copy the link, and paste it into the Memory screen.
+Create an account on the sign-in screen, then tap **+** and choose a file from
+`samples/` (copy one onto the phone first, or just photograph a report).
 
 ---
 
@@ -144,7 +144,7 @@ client isolation.
 | Stage | Model | Why |
 |---|---|---|
 | Read the document | `nvidia/nemotron-parse` | A document VLM. Keeps table structure and reading order, which is what a lab report *is*. Generic OCR flattens it into word soup. |
-| Structure the facts | `nvidia/nemotron-3-super-120b-a12b` | Turns messy markdown into typed rows. Knows "Glycated Haemoglobin", "HbA1C" and "A1c" are one test. |
+| Structure the facts | `nvidia/nemotron-3-super-120b-a12b` | Turns messy markdown into typed rows while preserving the measurement names printed in the report. |
 | Answer in English / Hindi | `nvidia/nemotron-3-super-120b-a12b` | Fluent, grounded answers over the user's own facts. |
 | Answer in Telugu | `nvidia/nemotron-3-ultra-550b-a55b` | See below. |
 
@@ -188,11 +188,14 @@ take the key.
 ## Where your data lives
 
 ```
-Google Drive          the original scan, untouched, still yours
+your phone            the original scan, untouched, still yours
     ↓
 server                bytes held in memory for two model calls, then dropped
-    ↓
-phone (SQLite)        ~200 bytes per result
+    ↓                 (never written to disk, no bucket, nothing to leak)
+Supabase (Postgres)   the results, under your account, guarded by row-level
+    ↓                 security so no one else's query can return them
+phone (SQLite)        a mirror, so the app works with no network.
+                      Erased on sign-out.
 ```
 
 The server writes nothing to disk and keeps no database. A 4 MB scan becomes a handful of rows
@@ -207,9 +210,10 @@ Privacy screen says so in the app rather than implying protection that is not th
 
 ## The warning is computed, not generated
 
-`server/src/health/trends.ts` is plain TypeScript. It groups facts by measurement, requires at
-least three points, checks the direction is consistent, fits a slope, and compares against
-reference ranges and clinical thresholds.
+`server/src/health/trends.ts` is plain TypeScript. It groups facts by the report's measurement
+name and unit, requires at least three dates, fits a least-squares slope, and compares each value
+only with the reference range printed on that report. It does not contain disease aliases or
+universal clinical thresholds.
 
 **No model is asked whether the user is at risk.** A model is only asked to restate, in the
 user's language, a finding the code already proved. This matters twice: a judge asking "what if
@@ -251,18 +255,18 @@ Regenerate with `python samples/make_reports.py`. The data is synthetic.
 server/
   src/
     config.ts          all credentials and model ids
-    schema.ts          the fact shape, and analyte canonicalisation
-    pipeline.ts        Drive link in, facts out
+    schema.ts          the fact shape and formatting-only normalization
+    pipeline.ts        an uploaded file in, facts out
+    auth.ts            verifies the caller's Supabase token
     mock.ts            offline fixtures
     nim/
       client.ts        the only place the key is attached to a request
       parse.ts         stage 1, nemotron-parse
       extract.ts       stage 2, markdown to typed JSON
       answer.ts        multilingual answering
-    drive/             share-link parsing and download
     health/trends.ts   the deterministic trend detector
     util/image.ts      downscaling for the inline size limit
-  test/                36 tests, no network needed
+  test/                26 tests, no network needed
 mobile/
   src/
     theme.ts           palette and type scale

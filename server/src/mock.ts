@@ -17,12 +17,12 @@ const YEARS = [
  * Offline mode returns the full five-year series in one go, so a single paste
  * reproduces the whole demo without any network at all.
  */
-export function mockDocuments(sourceId: string): IngestedDocument[] {
+export function mockDocuments(): IngestedDocument[] {
   return YEARS.map((row) => {
     const date = `${row.y}-03-11`;
     const base = { date, doctor: row.doctor, hospital: row.hospital, refLow: null, refHigh: null };
     return {
-      documentTitle: 'Laboratory Investigation Report',
+      documentTitle: 'SYNTHETIC DEMO - Laboratory Investigation Report',
       documentDate: date,
       hospital: row.hospital,
       doctor: row.doctor,
@@ -31,7 +31,7 @@ export function mockDocuments(sourceId: string): IngestedDocument[] {
         { ...base, analyte: 'Fasting Glucose', analyteAsPrinted: 'Fasting Blood Sugar (FBS)', value: row.fbs, unit: 'mg/dL', refLow: 70, refHigh: 110 },
         { ...base, analyte: 'Total Cholesterol', analyteAsPrinted: 'Total Cholesterol', value: row.chol, unit: 'mg/dL', refHigh: 200 },
       ],
-      sourceId: `${sourceId}-${row.y}`,
+      sourceId: `synthetic-demo-v1-${row.y}`,
       sourceName: `${row.y}_${row.hospital.split(' ')[0]!.toLowerCase()}.png`,
       pages: 1,
       ms: 0,

@@ -18,22 +18,22 @@ const TARGET_WIDTHS = [1000, 800, 640];
 export async function prepareForParse(input: Buffer): Promise<PreparedImage> {
   // Loaded lazily so the server still boots if the optional native dep is absent.
   const { default: sharp } = await import('sharp');
-  const meta = await sharp(input).metadata();
 
   for (const width of TARGET_WIDTHS) {
     for (const quality of [82, 70, 58]) {
-      const out = await sharp(input)
+      const { data: out, info } = await sharp(input, { limitInputPixels: 40_000_000 })
         .rotate()
+        .flatten({ background: '#ffffff' })
         .resize({ width, withoutEnlargement: true })
         .jpeg({ quality, mozjpeg: true })
-        .toBuffer();
+        .toBuffer({ resolveWithObject: true });
       const base64 = out.toString('base64');
       if (base64.length <= MAX_INLINE_BASE64_BYTES) {
         return {
           base64,
           mimeType: 'image/jpeg',
-          width: Math.min(width, meta.width ?? width),
-          height: meta.height ?? 0,
+          width: info.width,
+          height: info.height,
         };
       }
     }

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { c, font, space, type } from '../theme';
 import { Screen, BackHeader } from '../components/Chrome';
 import { SignalChart } from '../components/TrendChart';
-import { THRESHOLDS, THR_TEXT, yearsToThreshold, fmt } from '../insightDisplay';
+import { fmt } from '../insightDisplay';
 import type { Insight } from '../api';
 
 function formatDate(iso: string): string {
@@ -17,15 +17,14 @@ export function SignalScreen({ insight, onBack }: { insight: Insight; onBack: ()
   const i = Math.min(selectedIndex, insight.points.length - 1);
   const point = insight.points[i]!;
 
-  const threshold = THRESHOLDS[insight.analyte];
-  const years = yearsToThreshold(insight.lastValue, insight.slopePerYear, threshold);
-  const crossed = threshold !== undefined && insight.lastValue >= threshold;
   const labs = new Set(insight.points.map((p) => p.hospital)).size;
 
-  const verdict = point.normalOnItsOwnReport ? 'Called normal on that report' : 'Flagged outside range on that report';
+  const verdict = point.rangeStatus === 'within' ? 'Inside the range printed on that report' : point.rangeStatus === 'unknown' ? 'No range was printed on that report' : 'Outside the range printed on that report';
   const delta = fmt(Math.abs(insight.lastValue - insight.firstValue));
   const rate = `${insight.direction === 'rising' ? 'Rising' : 'Falling'} ${fmt(Math.abs(insight.slopePerYear))} ${insight.unit} per year`;
-  const thrText = (THR_TEXT[insight.analyte] ?? '') + (years !== null ? ` · about ${years.toFixed(1)} years away at this rate` : '');
+  const rangeText = point.refLow !== null || point.refHigh !== null
+    ? `${point.refLow ?? 'no lower limit'} to ${point.refHigh ?? 'no upper limit'} ${point.unit}`
+    : 'No reference range was printed';
 
   return (
     <Screen>
@@ -42,7 +41,7 @@ export function SignalScreen({ insight, onBack }: { insight: Insight; onBack: ()
           </Text>
         </View>
         <Text style={styles.context}>
-          {crossed ? 'Above the printed range on the latest report.' : 'Every report so far sat inside its own printed range.'}
+          {insight.everyReportLookedNormal ? 'Every report so far sat inside its own printed range.' : point.rangeStatus === 'unknown' ? 'The reports do not include a complete reference range.' : 'The latest report is outside its printed range.'}
         </Text>
       </View>
 
@@ -78,8 +77,8 @@ export function SignalScreen({ insight, onBack }: { insight: Insight; onBack: ()
         <View style={styles.howGrid}>
           <HowRow k="Method" v={`Least-squares slope over ${insight.points.length} points`} />
           <HowRow k="Rate" v={rate} />
-          <HowRow k="Threshold" v={thrText || 'No clinical threshold tracked for this test yet'} />
-          <HowRow k="Model" v="Used only to translate this sentence, never to judge it" />
+          <HowRow k="Report range" v={rangeText} />
+          <HowRow k="Source" v="Values and ranges were read from the uploaded reports" />
         </View>
         <Text style={styles.howFoot}>A pattern in your own reports, not a diagnosis. Take it to a doctor.</Text>
       </View>
