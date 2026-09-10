@@ -23,7 +23,7 @@ export async function loadLocalChats(userId: string): Promise<LocalChat[]> {
 }
 
 export async function saveLocalChats(userId: string, chats: LocalChat[]): Promise<void> {
-  await AsyncStorage.setItem(key(userId), JSON.stringify(chats));
+  await AsyncStorage.setItem(key(userId), JSON.stringify(chats.slice(0, 3)));
 }
 
 export async function clearLocalChats(userId: string): Promise<void> {

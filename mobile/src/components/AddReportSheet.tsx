@@ -1,16 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-// The new File class only understands plain file:// paths -- some pickers
-// (Google Drive, Photos) hand back a content:// URI even after
-// copyToCacheDirectory, and reading one throws "Missing READ permission".
-// The legacy API goes through Android's ContentResolver and handles both.
-import { EncodingType, readAsStringAsync } from 'expo-file-system/legacy';
 import { c, font, space } from '../theme';
 import { Sheet, Button, Notice } from './Chrome';
-import { api } from '../api';
-import { pushDocument } from '../remote';
 import { ACCEPTED_MIME_TYPES, MAX_UPLOAD_BYTES } from '../../../shared/contracts';
+import { startUpload } from '../uploadJob';
+import type { FamilyProfile } from '../family';
 
 const STAGES = ['Uploading the file', 'Reading the page', 'Structuring the facts', 'Discarding the file'];
 
@@ -31,44 +26,37 @@ interface Picked {
   size: number;
 }
 
-async function readFileBase64(uri: string): Promise<string> {
-  if (Platform.OS !== 'web') {
-    return readAsStringAsync(uri, { encoding: EncodingType.Base64 });
-  }
-
-  // expo-file-system's File class is native-only. On web, document-picker
-  // returns a blob URL, so read it through the browser instead.
-  const response = await fetch(uri);
-  if (!response.ok) throw new Error('Could not open the selected file.');
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
-}
-
 export function AddReportSheet({
   open,
   onClose,
   onSaved,
   userId,
+  sharedFile,
+  family,
 }: {
   open: boolean;
   onClose: () => void;
   onSaved: (note: string) => void;
   userId: string | null;
+  sharedFile?: Picked | null;
+  family: FamilyProfile[];
 }) {
   const [picked, setPicked] = useState<Picked | null>(null);
   const [busy, setBusy] = useState(false);
   const [stageIdx, setStageIdx] = useState(-1);
   const [error, setError] = useState<string | null>(null);
+  const [personId, setPersonId] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => () => {
     if (timer.current) clearInterval(timer.current);
   }, []);
+
+  useEffect(() => {
+    if (!sharedFile) return;
+    setPicked(sharedFile);
+    setError(null);
+  }, [sharedFile]);
 
   function reset() {
     setPicked(null);
@@ -79,7 +67,6 @@ export function AddReportSheet({
   }
 
   function close() {
-    if (busy) return;
     reset();
     onClose();
   }
@@ -87,14 +74,9 @@ export function AddReportSheet({
   async function pick() {
     setError(null);
     try {
-      // copyToCacheDirectory has a race on some devices/providers where the
-      // copy is still being flushed when we get the result back, so the
-      // cache file reads as unreadable moments later. Read the picker's own
-      // content:// URI instead -- the legacy file-system API goes through
-      // Android's ContentResolver and needs no local copy at all.
       const res = await DocumentPicker.getDocumentAsync({
         type: ACCEPTED,
-        copyToCacheDirectory: false,
+        copyToCacheDirectory: true,
         multiple: false,
       });
       if (res.canceled) return;
@@ -118,36 +100,13 @@ export function AddReportSheet({
 
   async function read() {
     if (busy || !picked) return;
+    if (!userId) { setError('Please sign in again before adding a report.'); return; }
     setBusy(true);
     setError(null);
-    setStageIdx(0);
-    timer.current = setInterval(() => {
-      setStageIdx((i) => (i < STAGES.length - 2 ? i + 1 : i));
-    }, 700);
-
-    try {
-      const fileBase64 = await readFileBase64(picked.uri);
-      const { documents: docs, factCount } = await api.ingest({
-        fileBase64,
-        mimeType: picked.mimeType,
-        name: picked.name,
-      });
-      for (const d of docs) await pushDocument(userId, d);
-
-      if (timer.current) clearInterval(timer.current);
-      setStageIdx(STAGES.length - 1);
+    void startUpload(userId, picked, personId).finally(() => {
       reset();
-      onSaved(
-        `Read ${docs.length} ${docs.length === 1 ? 'report' : 'reports'} and remembered ${factCount} facts. ` +
-          `The file itself was never stored.`,
-      );
       onClose();
-    } catch (err) {
-      if (timer.current) clearInterval(timer.current);
-      setBusy(false);
-      setStageIdx(-1);
-      setError(err instanceof Error ? err.message : 'Could not read that file.');
-    }
+    });
   }
 
   return (
@@ -176,6 +135,8 @@ export function AddReportSheet({
         )}
       </Pressable>
 
+      {family.length ? <View style={styles.family}><Text style={styles.familyLabel}>THIS REPORT BELONGS TO</Text><View style={styles.familyChoices}><Pressable onPress={() => setPersonId(null)} style={[styles.person, !personId && styles.personOn]}><Text style={[styles.personText, !personId && styles.personTextOn]}>Me</Text></Pressable>{family.map(member => <Pressable key={member.id} onPress={() => setPersonId(member.id)} style={[styles.person, personId === member.id && styles.personOn]}><Text style={[styles.personText, personId === member.id && styles.personTextOn]}>{member.displayName}</Text></Pressable>)}</View></View> : null}
+
       {error ? (
         <View style={styles.errorSlot}>
           <Notice text={error} tone="error" />
@@ -194,7 +155,7 @@ export function AddReportSheet({
       ) : null}
 
       <View style={styles.actions}>
-        <Button label="Cancel" onPress={close} disabled={busy} tone="quiet" />
+        <Button label="Minimize" onPress={close} tone="quiet" />
         <View style={styles.spacer}>
           <Button label={busy ? 'Reading…' : 'Read it'} onPress={read} disabled={busy || !picked} />
         </View>
@@ -216,6 +177,8 @@ const styles = StyleSheet.create({
   dropzoneLabel: { fontFamily: font.bodyMedium, fontSize: 15, color: c.text },
   pickedName: { fontFamily: font.bodyMedium, fontSize: 15, color: c.text, maxWidth: '100%' },
   pickedMeta: { fontFamily: font.body, fontSize: 12, color: c.textFaint },
+
+  family: { marginTop: space(2) }, familyLabel: { fontFamily: font.bodySemibold, fontSize: 10, letterSpacing: 1.4, color: c.textFaint, marginBottom: space(1) }, familyChoices: { flexDirection: 'row', gap: space(1), flexWrap: 'wrap' }, person: { borderRadius: 12, borderWidth: 1, borderColor: c.hairSoft, paddingHorizontal: space(1.5), paddingVertical: space(0.9) }, personOn: { borderColor: c.gold, backgroundColor: c.goldWash }, personText: { fontFamily: font.bodyMedium, fontSize: 12, color: c.textMuted }, personTextOn: { color: c.gold },
 
   errorSlot: { marginTop: space(2) },
   stages: { marginTop: space(2.5), gap: space(1.25) },

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { SafeAreaView, StatusBar, StyleSheet, View, Platform, KeyboardAvoidingView, ActivityIndicator } from 'react-native';
+import { SafeAreaView, StatusBar, StyleSheet, View, Text, Platform, KeyboardAvoidingView, ActivityIndicator, BackHandler } from 'react-native';
 import { useFonts } from 'expo-font';
 import { c, fontsToLoad } from './src/theme';
 import { BottomNav, useKeyboardVisible, type View5 } from './src/components/Chrome';
@@ -8,6 +8,8 @@ import { SignalScreen } from './src/screens/Signal';
 import { MemoryScreen } from './src/screens/Timeline';
 import { AskScreen } from './src/screens/Ask';
 import { PrivacyScreen } from './src/screens/Privacy';
+import { FamilyScreen } from './src/screens/Family';
+import { ReportProcessingOverlay } from './src/components/ReportProcessingOverlay';
 import { SignInScreen } from './src/screens/SignIn';
 import { AddReportSheet } from './src/components/AddReportSheet';
 import { WipeSheet } from './src/components/WipeSheet';
@@ -17,6 +19,12 @@ import { api, formatWarning, isSafeWarningMessage, type Fact, type Insight, type
 import { useSession } from './src/useSession';
 import { supabase } from './src/supabase';
 import { clearLocalChats } from './src/chatStorage';
+import { detectLocalTrends } from './src/trendAnalysis';
+import { useUploadJob } from './src/uploadJob';
+import { reportTools } from './modules/report-tools';
+import { fetchFamily, type FamilyProfile } from './src/family';
+
+type SharedReport = { uri: string; name: string; mimeType: string; size: number };
 
 export default function App() {
   const [fontsLoaded] = useFonts(fontsToLoad);
@@ -25,6 +33,8 @@ export default function App() {
   const [view, setView] = useState<View5>('home');
   const [selectedAnalyte, setSelectedAnalyte] = useState<string | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sharedReport, setSharedReport] = useState<SharedReport | null>(null);
+  const [family, setFamily] = useState<FamilyProfile[]>([]);
   const [wipeOpen, setWipeOpen] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -37,6 +47,35 @@ export default function App() {
   const [insights, setInsights] = useState<Insight[]>([]);
   const [warning, setWarning] = useState<{ insight: Insight; message: string | null } | null>(null);
   const [phrasing, setPhrasing] = useState(false);
+  const uploadJob = useUploadJob();
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    // If SMRUTI was opened from another application's share sheet, put that
+    // selected report into the normal review screen instead of asking again.
+    void reportTools().sharedFile().then((file) => {
+      if (!file) return;
+      setSharedReport({ ...file, size: 0 });
+      setSheetOpen(true);
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (!uploadJob || uploadJob.busy || !uploadJob.completed) return;
+    setNote(uploadJob.text);
+    void refresh();
+  }, [uploadJob?.completed]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (wipeOpen) { setWipeOpen(false); return true; }
+      if (sheetOpen) { setSheetOpen(false); return true; }
+      if (view !== 'home') { setView('home'); setSelectedAnalyte(null); return true; }
+      return false;
+    });
+    return () => subscription.remove();
+  }, [sheetOpen, view, wipeOpen]);
 
   /**
    * Supabase is the truth; the local database is a mirror we fall back to.
@@ -77,6 +116,13 @@ export default function App() {
     void refresh();
   }, [refresh]);
 
+  const refreshFamily = useCallback(async () => {
+    if (!userId) { setFamily([]); return; }
+    try { setFamily(await fetchFamily()); } catch { setFamily([]); }
+  }, [userId]);
+
+  useEffect(() => { void refreshFamily(); }, [refreshFamily]);
+
   useEffect(() => {
     let cancelled = false;
     if (facts.length === 0) {
@@ -86,9 +132,18 @@ export default function App() {
     }
     (async () => {
       try {
-        const { insights: found } = await api.insights(facts);
+        const local = detectLocalTrends(facts);
+        setInsights(local);
+        let found = local;
+        try {
+          const response = await api.insights(facts);
+          if (cancelled) return;
+          found = response.insights.length ? response.insights : local;
+          setInsights(found);
+        } catch {
+          // The report data is already available; keep the local computation.
+        }
         if (cancelled) return;
-        setInsights(found);
 
         const top = found.find((i) => i.severity === 'warning');
         if (!top) {
@@ -212,9 +267,12 @@ export default function App() {
               onBack={() => setView('home')}
               onAskWipe={() => setWipeOpen(true)}
               onSignOut={() => void signOut()}
+              onFamily={() => setView('family')}
             />
           )}
+          {view === 'family' && <FamilyScreen onBack={() => setView('vault')} onChanged={() => void refreshFamily()} />}
         </View>
+        {uploadJob?.busy ? <ReportProcessingOverlay text={uploadJob.text} /> : null}
 
         {view !== 'signal' && !keyboardUp && (
           <BottomNav active={view} onChange={setView} onAdd={() => setSheetOpen(true)} />
@@ -224,7 +282,9 @@ export default function App() {
       <AddReportSheet
         open={sheetOpen}
         userId={userId}
-        onClose={() => setSheetOpen(false)}
+        sharedFile={sharedReport}
+        family={family}
+        onClose={() => { setSheetOpen(false); setSharedReport(null); }}
         onSaved={(msg) => {
           setNote(msg);
           void refresh();

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Linking } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, supabaseConfigured } from './supabase';
 
@@ -22,6 +23,22 @@ export function useSession(): SessionState {
 
     let cancelled = false;
 
+    async function handleAuthUrl(url: string | null) {
+      if (!url || cancelled) return;
+      const parsed = new URL(url);
+      const code = parsed.searchParams.get('code');
+      if (code) {
+        await supabase.auth.exchangeCodeForSession(code);
+        return;
+      }
+      const tokenHash = parsed.searchParams.get('token_hash');
+      const type = parsed.searchParams.get('type') as 'signup' | 'recovery' | 'invite' | 'email_change' | null;
+      if (tokenHash && type) await supabase.auth.verifyOtp({ token_hash: tokenHash, type });
+    }
+
+    void Linking.getInitialURL().then(handleAuthUrl).catch(() => undefined);
+    const linking = Linking.addEventListener('url', ({ url }) => { void handleAuthUrl(url); });
+
     // A session may already be on the device from last time. Read it before
     // rendering anything, otherwise a returning user sees the sign-in screen
     // blink past on every launch.
@@ -42,6 +59,7 @@ export function useSession(): SessionState {
 
     return () => {
       cancelled = true;
+      linking.remove();
       sub.subscription.unsubscribe();
     };
   }, []);
