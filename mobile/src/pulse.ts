@@ -1,5 +1,6 @@
 import jpeg from 'jpeg-js';
 import { base64ToBytes } from './base64';
+import { estimateCalibratedBp, type BpCalibration } from './bpCalibration';
 
 /**
  * Camera-based pulse (PPG) estimation.
@@ -10,9 +11,11 @@ import { base64ToBytes } from './base64';
  * sensor itself cannot expose (see the research note this feature was built
  * from) -- no biometric API is touched here, only ordinary camera frames.
  *
- * This is a consumer estimate, not a medical device: no calibration against
- * a clinical reference, and the result is never written to the health
- * record -- it is shown once and discarded.
+ * This is a consumer estimate, not a medical device. Every metric here is either a
+ * direct measurement or a real signal-derived indicator -- nothing is randomized or
+ * hardcoded. Blood pressure is the one exception that needs external grounding: it's
+ * only computed when the user has calibrated against a real cuff reading (see
+ * bpCalibration.ts), and is omitted otherwise rather than guessed.
  */
 
 export interface PulseSample {
@@ -100,7 +103,7 @@ import type { Fact } from './api';
 
 export interface CheckupTestItem {
   id: string;
-  category: 'Cardiovascular' | 'Metabolic' | 'Respiratory' | 'Autonomic & HRV' | 'Vascular Health';
+  category: 'Cardiovascular' | 'Metabolic' | 'Respiratory' | 'Autonomic & HRV' | 'Vascular Health' | 'Signal Quality';
   name: string;
   value: string | number;
   unit: string;
@@ -122,7 +125,7 @@ export interface PulseAnalysisResult {
   reason?: string;
 }
 
-export function estimateBpm(samples: PulseSample[]): PulseAnalysisResult {
+export function estimateBpm(samples: PulseSample[], calibration?: BpCalibration | null): PulseAnalysisResult {
   if (samples.length < 15) {
     return {
       bpm: null,
@@ -148,8 +151,8 @@ export function estimateBpm(samples: PulseSample[]): PulseAnalysisResult {
   }
 
   // 2. Try whole-signal analysis, or fallback to cleanest sub-window if finger moved
-  const result = analyzeSignalWindow(rawGrid, RESAMPLE_HZ) ??
-                 analyzeSignalSubwindows(rawGrid, RESAMPLE_HZ);
+  const result = analyzeSignalWindow(rawGrid, RESAMPLE_HZ, calibration) ??
+                 analyzeSignalSubwindows(rawGrid, RESAMPLE_HZ, calibration);
 
   if (!result) {
     return {
@@ -162,7 +165,7 @@ export function estimateBpm(samples: PulseSample[]): PulseAnalysisResult {
 }
 
 /** Analyzes a specific slice of resampled PPG data */
-function analyzeSignalWindow(grid: number[], hz: number): PulseAnalysisResult | null {
+function analyzeSignalWindow(grid: number[], hz: number, calibration?: BpCalibration | null): PulseAnalysisResult | null {
   if (grid.length < hz * 5) return null; // Need at least 5 seconds
 
   // 1. Clamp sudden motion spikes (derivative outlier rejection)
@@ -250,6 +253,28 @@ function analyzeSignalWindow(grid: number[], hz: number): PulseAnalysisResult | 
   const varianceClean = cleanIntervals.reduce((s, x) => s + Math.pow(x - meanClean, 2), 0) / cleanIntervals.length;
   const sdnn = Math.round(Math.sqrt(varianceClean) * 1000);
 
+  // pNN50: percentage of successive NN-interval differences exceeding 50ms.
+  // Standard time-domain HRV metric (same parasympathetic significance as RMSSD).
+  let pnn50: number | null = null;
+  if (cleanIntervals.length > 1) {
+    let over50 = 0;
+    for (let i = 1; i < cleanIntervals.length; i++) {
+      if (Math.abs(cleanIntervals[i]! - cleanIntervals[i - 1]!) * 1000 > 50) over50++;
+    }
+    pnn50 = Math.round((over50 / (cleanIntervals.length - 1)) * 100);
+  }
+
+  // Measurement Consistency: the fraction of detected beats that survived RR-interval
+  // outlier filtering. A real quality/confidence indicator -- not a vital sign -- so a
+  // doctor reading the report knows how reliable the rest of the numbers are.
+  const measurementConsistency = Math.round((cleanIntervals.length / rawIntervals.length) * 100);
+
+  // Heart Rate Range: real min/max instantaneous beat-to-beat rate across the recording,
+  // distinct from (and more informative than) the single median HR figure.
+  const cleanBpms = cleanIntervals.map((intv) => 60 / intv);
+  const hrMin = Math.round(Math.min(...cleanBpms));
+  const hrMax = Math.round(Math.max(...cleanBpms));
+
   // Autonomic state classification
   let stressState: 'Rest (Calm)' | 'Moderate' | 'Elevated Stress' = 'Moderate';
   if (rmssd !== null) {
@@ -258,25 +283,67 @@ function analyzeSignalWindow(grid: number[], hz: number): PulseAnalysisResult | 
     else stressState = 'Moderate';
   }
 
-  // 6. Morphological Vascular Stiffness: Systolic Upstroke Time (Foot to Peak)
+  // 6. Beat morphology: Systolic Upstroke Time (foot to peak) and Reflection Index
+  // (dicrotic notch + diastolic reflection peak height relative to the systolic peak).
   const upstrokes: number[] = [];
-  for (const peak of peakIndices) {
+  const reflectionRatios: number[] = [];
+  for (let pi = 0; pi < peakIndices.length; pi++) {
+    const peak = peakIndices[pi]!;
+    const peakVal = validSignal[peak]!;
+
+    // Foot: walk backward to the pulse's starting minimum
     const searchBack = Math.max(0, peak - Math.floor(hz * 0.4));
-    let minVal = validSignal[peak]!;
-    let minIdx = peak;
+    let footVal = peakVal;
+    let footIdx = peak;
     for (let j = peak - 1; j >= searchBack; j--) {
-      if (validSignal[j]! < minVal) {
-        minVal = validSignal[j]!;
-        minIdx = j;
+      if (validSignal[j]! < footVal) {
+        footVal = validSignal[j]!;
+        footIdx = j;
       }
     }
-    const durationMs = ((peak - minIdx) / hz) * 1000;
+    const durationMs = ((peak - footIdx) / hz) * 1000;
     if (durationMs >= 50 && durationMs <= 300) {
       upstrokes.push(durationMs);
+    }
+
+    // Reflection: walk forward from the systolic peak to the first local minimum
+    // (dicrotic notch), then onward to the next local maximum (diastolic/reflection peak).
+    const nextPeak = pi + 1 < peakIndices.length ? peakIndices[pi + 1]! : validSignal.length - 1;
+    const searchForwardEnd = Math.min(peak + Math.floor(hz * 0.5), nextPeak - 1, validSignal.length - 1);
+    let notchIdx = peak + 1;
+    while (notchIdx < searchForwardEnd && validSignal[notchIdx]! <= validSignal[notchIdx - 1]!) notchIdx++;
+    notchIdx--;
+    let diastolicIdx = notchIdx + 1;
+    while (diastolicIdx < searchForwardEnd && validSignal[diastolicIdx]! >= validSignal[diastolicIdx - 1]!) diastolicIdx++;
+    diastolicIdx--;
+
+    if (notchIdx > peak && diastolicIdx > notchIdx && diastolicIdx < searchForwardEnd) {
+      const diastolicVal = validSignal[diastolicIdx]!;
+      const systolicHeight = peakVal - footVal;
+      const reflectionHeight = diastolicVal - footVal;
+      if (systolicHeight > 0 && reflectionHeight > 0 && reflectionHeight < systolicHeight) {
+        reflectionRatios.push((reflectionHeight / systolicHeight) * 100);
+      }
     }
   }
   upstrokes.sort((a, b) => a - b);
   const upstrokeMs = upstrokes.length > 0 ? Math.round(upstrokes[Math.floor(upstrokes.length / 2)]!) : null;
+
+  // Only report Reflection Index when the dicrotic notch was cleanly detected on enough
+  // beats -- low-resolution camera PPG often doesn't resolve it, and a single noisy
+  // detection isn't worth reporting.
+  let reflectionIndexPct: number | null = null;
+  if (reflectionRatios.length >= 3) {
+    reflectionRatios.sort((a, b) => a - b);
+    reflectionIndexPct = Math.round(reflectionRatios[Math.floor(reflectionRatios.length / 2)]!);
+  }
+
+  // Perfusion Index: the standard clinical pulse-oximetry formula, AC/DC x 100, where AC
+  // is the pulsatile waveform amplitude and DC is the mean (non-pulsatile) optical baseline
+  // of this same window.
+  const clampedValid = clamped.slice(settlingSamples);
+  const localDC = clampedValid.reduce((a, b) => a + b, 0) / clampedValid.length;
+  const perfusionIndexPct = localDC > 0 ? Number(((amplitude / localDC) * 100).toFixed(2)) : null;
 
   // Vascular Elasticity & Metabolic Surrogate
   // Compliant healthy vessels: upstroke 120-200 ms. Stiffened vessels: < 105 ms.
@@ -306,13 +373,50 @@ function analyzeSignalWindow(grid: number[], hz: number): PulseAnalysisResult | 
     { id: 'sdnn', category: 'Autonomic & HRV', name: 'HRV Total Variability (SDNN)', value: sdnn ?? 'n/a', unit: 'ms', range: '30 - 100 ms', status: 'Normal' },
     { id: 'vasc_el', category: 'Vascular Health', name: 'Vascular Elasticity', value: vascularElasticity, unit: 'compliance', range: 'Optimal Elasticity', status: vascularElasticity === 'Optimal Elasticity' ? 'Optimal' : 'Normal' },
     { id: 'upstroke', category: 'Vascular Health', name: 'Systolic Upstroke Time', value: upstrokeMs ?? 'n/a', unit: 'ms', range: '120 - 200 ms', status: upstrokeMs === null ? 'Normal' : upstrokeMs >= 120 ? 'Optimal' : 'Borderline' },
+    { id: 'hr_range', category: 'Cardiovascular', name: 'Heart Rate Range (Min-Max)', value: `${hrMin}-${hrMax}`, unit: 'bpm', range: 'within 60 - 100 bpm', status: hrMin >= 55 && hrMax <= 105 ? 'Normal' : 'Borderline' },
+    { id: 'consistency', category: 'Signal Quality', name: 'Measurement Consistency', value: measurementConsistency, unit: '%', range: '> 80 %', status: measurementConsistency >= 90 ? 'Optimal' : measurementConsistency >= 80 ? 'Normal' : 'Borderline' },
   ];
 
   if (stressScore !== null) {
     testItems.push({ id: 'stress', category: 'Autonomic & HRV', name: 'Autonomic Stress Score', value: stressScore, unit: '%', range: '< 40 %', status: stressScore <= 40 ? 'Optimal' : stressScore <= 60 ? 'Normal' : 'Elevated' });
   }
+  if (pnn50 !== null) {
+    testItems.push({ id: 'pnn50', category: 'Autonomic & HRV', name: 'HRV pNN50', value: pnn50, unit: '%', range: '> 10 %', status: pnn50 >= 10 ? 'Normal' : 'Borderline' });
+  }
+  if (reflectionIndexPct !== null) {
+    testItems.push({ id: 'reflection_idx', category: 'Vascular Health', name: 'Reflection Index (Dicrotic)', value: reflectionIndexPct, unit: '%', range: '30 - 70 %', status: reflectionIndexPct >= 30 && reflectionIndexPct <= 70 ? 'Normal' : 'Borderline' });
+  }
+  if (perfusionIndexPct !== null) {
+    testItems.push({ id: 'perfusion_idx', category: 'Vascular Health', name: 'Perfusion Index (AC/DC)', value: perfusionIndexPct, unit: '%', range: 'higher = stronger pulse', status: 'Normal' });
+  }
   if (estimatedRespirationRate !== null) {
     testItems.push({ id: 'resp', category: 'Respiratory', name: 'Respiration Rate', value: estimatedRespirationRate, unit: 'breaths/min', range: '12 - 20 br/min', status: estimatedRespirationRate >= 12 && estimatedRespirationRate <= 20 ? 'Normal' : 'Borderline' });
+  }
+
+  // Blood Pressure: only computed when the user has calibrated against a real cuff
+  // reading (see bpCalibration.ts). Without that anchor, no formula from this signal
+  // alone can produce a trustworthy mmHg value, so it's omitted rather than guessed.
+  if (calibration && upstrokeMs !== null) {
+    const calibratedBp = estimateCalibratedBp(calibration, upstrokeMs, bpm);
+    if (calibratedBp) {
+      const { systolic, diastolic, ageDays, stale } = calibratedBp;
+      const map = Math.round((2 * diastolic + systolic) / 3);
+      const pulsePressure = systolic - diastolic;
+      const bpStatus = stale ? 'Borderline' : systolic < 120 && diastolic < 80 ? 'Optimal' : systolic < 130 ? 'Normal' : 'Elevated';
+      testItems.push({ id: 'bp_sys', category: 'Cardiovascular', name: 'Blood Pressure (Systolic, Calibrated Est.)', value: systolic, unit: 'mmHg', range: '90 - 120 mmHg', status: bpStatus });
+      testItems.push({ id: 'bp_dia', category: 'Cardiovascular', name: 'Blood Pressure (Diastolic, Calibrated Est.)', value: diastolic, unit: 'mmHg', range: '60 - 80 mmHg', status: bpStatus });
+      testItems.push({ id: 'map', category: 'Cardiovascular', name: 'Mean Arterial Pressure (MAP)', value: map, unit: 'mmHg', range: '70 - 100 mmHg', status: bpStatus });
+      testItems.push({ id: 'pp', category: 'Cardiovascular', name: 'Pulse Pressure', value: pulsePressure, unit: 'mmHg', range: '30 - 50 mmHg', status: pulsePressure >= 30 && pulsePressure <= 50 ? 'Normal' : 'Borderline' });
+      testItems.push({
+        id: 'bp_cal_age',
+        category: 'Signal Quality',
+        name: 'BP Calibration Age',
+        value: ageDays,
+        unit: 'days',
+        range: stale ? 'Recalibrate soon (> 30 days)' : '< 30 days',
+        status: stale ? 'Borderline' : 'Normal',
+      });
+    }
   }
 
   // Extract normalized waveform points for visual graph (last ~4 seconds / ~80 points)
@@ -385,7 +489,10 @@ export function buildCheckupFacts(analysis: PulseAnalysisResult, docId: string, 
   const items = analysis.testItems ?? [];
   const facts: Fact[] = [];
   for (const item of items) {
-    let numVal = typeof item.value === 'number' ? item.value : parseFloat(String(item.value).replace(/[^0-9.-]/g, ''));
+    // Skip composite values like "62-70" (a range, not a single reading) -- parsing
+    // just the leading number would silently store a wrong/partial value as a fact.
+    if (typeof item.value === 'string' && !/^-?\d+(\.\d+)?$/.test(item.value.trim())) continue;
+    const numVal = typeof item.value === 'number' ? item.value : parseFloat(item.value);
     if (isNaN(numVal)) continue;
 
     let refLow: number | null = null;
@@ -419,14 +526,14 @@ export function buildCheckupFacts(analysis: PulseAnalysisResult, docId: string, 
 }
 
 /** If the user moved their finger momentarily, scans overlapping 9-second sub-windows for a stable reading */
-function analyzeSignalSubwindows(grid: number[], hz: number): PulseAnalysisResult | null {
+function analyzeSignalSubwindows(grid: number[], hz: number, calibration?: BpCalibration | null): PulseAnalysisResult | null {
   const windowLen = hz * 9; // 9-second window
   const step = hz * 3;     // 3-second step
   let bestResult: PulseAnalysisResult | null = null;
 
   for (let start = 0; start + windowLen <= grid.length; start += step) {
     const slice = grid.slice(start, start + windowLen);
-    const result = analyzeSignalWindow(slice, hz);
+    const result = analyzeSignalWindow(slice, hz, calibration);
     if (result?.bpm) {
       bestResult = result;
       break;

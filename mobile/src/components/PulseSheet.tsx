@@ -16,6 +16,7 @@ import {
 } from '../pulse';
 import { saveCheckupDocument, type StoredDocument } from '../db';
 import { downloadCheckupReport } from '../reportPdf';
+import { loadBpCalibration, saveBpCalibration, calibrationAgeDays, type BpCalibration } from '../bpCalibration';
 
 const DURATION_MS = 20_000;
 const MIN_CAPTURE_GAP_MS = 60; // 60ms gap yields ~10-15 FPS which is ideal for PPG
@@ -62,6 +63,12 @@ export function PulseSheet({
   const [capturedCount, setCapturedCount] = useState(0);
   const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
 
+  const [bpCalibration, setBpCalibration] = useState<BpCalibration | null>(null);
+  const [showCalibrationForm, setShowCalibrationForm] = useState(false);
+  const [calSystolic, setCalSystolic] = useState('');
+  const [calDiastolic, setCalDiastolic] = useState('');
+  const [calibrationSaving, setCalibrationSaving] = useState(false);
+
   const cameraRef = useRef<CameraView>(null);
   const runningRef = useRef(false);
   const readyRef = useRef(false);
@@ -76,11 +83,44 @@ export function PulseSheet({
         if (val) setUserName(val);
       })
       .catch(() => {});
+    loadBpCalibration().then(setBpCalibration).catch(() => {});
   }, []);
 
   function handleNameChange(val: string) {
     setUserName(val);
     AsyncStorage.setItem('smruti_patient_name', val).catch(() => {});
+  }
+
+  async function handleSaveCalibration() {
+    if (!analysis?.upstrokeMs || !analysis?.bpm) return;
+    const sys = parseInt(calSystolic, 10);
+    const dia = parseInt(calDiastolic, 10);
+    if (!Number.isFinite(sys) || !Number.isFinite(dia) || sys < 70 || sys > 220 || dia < 40 || dia > 140 || dia >= sys) {
+      Alert.alert('Check the numbers', 'Enter a plausible systolic (70-220) and diastolic (40-140) reading from your BP cuff, taken around now.');
+      return;
+    }
+    setCalibrationSaving(true);
+    try {
+      const cal: BpCalibration = { systolic: sys, diastolic: dia, upstrokeMs: analysis.upstrokeMs, bpm: analysis.bpm, at: new Date().toISOString() };
+      await saveBpCalibration(cal);
+      setBpCalibration(cal);
+      setShowCalibrationForm(false);
+      setCalSystolic('');
+      setCalDiastolic('');
+
+      // Recompute this session's checkup with the new calibration so BP shows up
+      // immediately, without forcing the user through another 20-second scan.
+      if (samplesRef.current.length) {
+        const recomputed = estimateBpm(samplesRef.current, cal);
+        if (recomputed.bpm) {
+          setAnalysis(recomputed);
+          setBpm(recomputed.bpm);
+          if (userId) void persistToMemory(recomputed, userId);
+        }
+      }
+    } finally {
+      setCalibrationSaving(false);
+    }
   }
 
   function stopAndReset() {
@@ -250,7 +290,7 @@ export function PulseSheet({
     await new Promise((resolve) => setTimeout(resolve, 150));
 
     try {
-      const result = estimateBpm(samplesRef.current);
+      const result = estimateBpm(samplesRef.current, bpCalibration);
       if (result.bpm) {
         setBpm(result.bpm);
         setAnalysis(result);
@@ -427,6 +467,58 @@ export function PulseSheet({
                 placeholder="Enter patient name (e.g. Rahul Sharma)"
                 placeholderTextColor={c.textFaint}
               />
+            </View>
+
+            {/* Blood Pressure Calibration */}
+            <View style={styles.nameCard}>
+              <Text style={styles.nameLabel}>BLOOD PRESSURE</Text>
+              {bpCalibration && !showCalibrationForm ? (
+                <>
+                  <Text style={styles.instructionText}>
+                    Calibrated {calibrationAgeDays(bpCalibration)} day{calibrationAgeDays(bpCalibration) === 1 ? '' : 's'} ago against a {bpCalibration.systolic}/{bpCalibration.diastolic} mmHg cuff reading.
+                    {calibrationAgeDays(bpCalibration) > 30 ? ' This is getting stale — recalibrate for a trustworthy estimate.' : ' BP estimates above use this as their anchor.'}
+                  </Text>
+                  <View style={{ marginTop: space(1) }}>
+                    <Button label="Recalibrate with a new cuff reading" onPress={() => setShowCalibrationForm(true)} tone="quiet" />
+                  </View>
+                </>
+              ) : showCalibrationForm ? (
+                <>
+                  <Text style={styles.instructionText}>
+                    Enter a reading from a real BP cuff taken now (or very recently). This anchors future camera readings to your real blood pressure — it cannot be estimated without it.
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: space(1), marginTop: space(1) }}>
+                    <TextInput
+                      style={[styles.nameInput, { flex: 1 }]}
+                      value={calSystolic}
+                      onChangeText={setCalSystolic}
+                      placeholder="Systolic"
+                      placeholderTextColor={c.textFaint}
+                      keyboardType="number-pad"
+                    />
+                    <TextInput
+                      style={[styles.nameInput, { flex: 1 }]}
+                      value={calDiastolic}
+                      onChangeText={setCalDiastolic}
+                      placeholder="Diastolic"
+                      placeholderTextColor={c.textFaint}
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                  <View style={{ marginTop: space(1) }}>
+                    <Button label={calibrationSaving ? 'Saving...' : 'Save Calibration'} onPress={handleSaveCalibration} disabled={calibrationSaving} />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.instructionText}>
+                    Blood pressure can't be estimated from camera PPG alone — enter one reading from a real BP cuff to anchor it. Without this, BP is left out of the checkup rather than guessed.
+                  </Text>
+                  <View style={{ marginTop: space(1) }}>
+                    <Button label="Calibrate Blood Pressure" onPress={() => setShowCalibrationForm(true)} tone="quiet" />
+                  </View>
+                </>
+              )}
             </View>
 
             {/* Health Memory & Ask Chat Sync Banner */}

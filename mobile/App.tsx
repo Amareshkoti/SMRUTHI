@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { SafeAreaView, StatusBar, StyleSheet, View, Text, Platform, KeyboardAvoidingView, ActivityIndicator, BackHandler } from 'react-native';
+import { StatusBar, StyleSheet, View, Text, Platform, KeyboardAvoidingView, ActivityIndicator, BackHandler } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { useFonts } from 'expo-font';
 import { c, fontsToLoad } from './src/theme';
 import { BottomNav, useKeyboardVisible, type View5 } from './src/components/Chrome';
@@ -27,6 +28,14 @@ import { fetchFamily, type FamilyProfile } from './src/family';
 type SharedReport = { uri: string; name: string; mimeType: string; size: number };
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppInner />
+    </SafeAreaProvider>
+  );
+}
+
+function AppInner() {
   const [fontsLoaded] = useFonts(fontsToLoad);
   const { userId, email, loading: sessionLoading } = useSession();
 
@@ -53,7 +62,16 @@ export default function App() {
     if (Platform.OS !== 'android') return;
     // If SMRUTI was opened from another application's share sheet, put that
     // selected report into the normal review screen instead of asking again.
-    void reportTools().sharedFile().then((file) => {
+    // reportTools() throws synchronously (not via the promise) when the native
+    // module isn't present in this build -- e.g. Expo Go or an older APK --
+    // so it needs its own try/catch rather than relying on .catch() below.
+    let tools: ReturnType<typeof reportTools>;
+    try {
+      tools = reportTools();
+    } catch {
+      return;
+    }
+    void tools.sharedFile().then((file) => {
       if (!file) return;
       setSharedReport({ ...file, size: 0 });
       setSheetOpen(true);
@@ -311,7 +329,6 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: c.ink,
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight ?? 0 : 0,
   },
   body: { flex: 1 },
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
