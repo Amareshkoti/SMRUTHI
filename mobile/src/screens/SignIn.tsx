@@ -26,6 +26,7 @@ export function SignInScreen() {
         const { data, error: err } = await supabase.auth.signUp({
           email: email.trim(),
           password,
+          options: { emailRedirectTo: 'smruti://auth/callback' },
         });
         if (err) throw err;
         // With email confirmation switched on, there is no session yet. Saying

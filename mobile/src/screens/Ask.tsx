@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, TextInput, Pressable, ScrollView } from 'react-native';
 import { c, font, space } from '../theme';
 import { LanguagePicker, Notice } from '../components/Chrome';
+import { VoiceCallButton } from '../components/VoiceCallButton';
 import { api, type ChatTurn, type Fact, type Language } from '../api';
 import type { StoredMessage } from '../db';
 import { loadLocalChats, saveLocalChats, type LocalChat } from '../chatStorage';
@@ -76,6 +77,10 @@ export function AskScreen({
   }, [activeChatId, chats]);
 
   async function newChat() {
+    if (chats.length >= 3) {
+      setError('You can keep up to 3 chats. Delete one before starting another.');
+      return;
+    }
     try {
       const now = new Date().toISOString();
       const chat: LocalChat = { id: `${Date.now()}`, title: 'New chat', createdAt: now, updatedAt: now, messages: [] };
@@ -144,6 +149,7 @@ export function AskScreen({
 
   return (
     <View style={styles.root}>
+      <View style={styles.voiceDock}><VoiceCallButton facts={facts} language={language} /></View>
       <ScrollView
         ref={scroller}
         style={styles.scroll}
@@ -153,10 +159,7 @@ export function AskScreen({
         onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: true })}
       >
         <View style={styles.header}>
-          <View style={styles.headerRow}>
-            <Text style={styles.label}>ASK</Text>
-            <Pressable onPress={newChat} hitSlop={10} accessibilityRole="button"><Text style={styles.clear}>New chat</Text></Pressable>
-          </View>
+          <View style={styles.headerRow}><Text style={styles.label}>ASK</Text></View>
           <Text style={styles.title}>In the language{'\n'}you think in.</Text>
         </View>
 
@@ -164,14 +167,15 @@ export function AskScreen({
           <LanguagePicker value={language} onChange={onLanguage} />
         </View>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chatTabs}>
+        <View style={styles.chatTabs}>
           {chats.map((chat) => (
             <Pressable key={chat.id} onPress={() => setActiveChatId(chat.id)} style={[styles.chatTab, chat.id === activeChatId && styles.chatTabOn]}>
               <Text numberOfLines={1} style={[styles.chatTabText, chat.id === activeChatId && styles.chatTabTextOn]}>{chat.title}</Text>
             </Pressable>
           ))}
           {activeChatId ? <Pressable onPress={removeChat} style={styles.deleteChat}><Text style={styles.deleteChatText}>Delete chat</Text></Pressable> : null}
-        </ScrollView>
+          {chats.length < 3 ? <Pressable onPress={newChat} style={styles.newChat}><Text style={styles.newChatText}>+ Chat</Text></Pressable> : null}
+        </View>
 
         {messages.map((m) =>
           m.role === 'user' ? (
@@ -242,6 +246,7 @@ export function AskScreen({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: c.ink },
+  voiceDock: { backgroundColor: c.ink, zIndex: 2 },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: space(2) },
 
@@ -252,13 +257,15 @@ const styles = StyleSheet.create({
   title: { fontFamily: font.display, fontSize: 38, lineHeight: 44, color: c.text, marginTop: space(1.25) },
 
   langSlot: { marginHorizontal: space(3), marginTop: space(2.5) },
-  chatTabs: { paddingHorizontal: space(3), gap: space(1), marginTop: space(2) },
-  chatTab: { maxWidth: 150, borderRadius: 14, borderWidth: 1, borderColor: c.hairSoft, paddingVertical: space(1), paddingHorizontal: space(1.5) },
+  chatTabs: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space(3), gap: space(1), marginTop: space(2) },
+  chatTab: { flex: 1, minWidth: 0, borderRadius: 14, borderWidth: 1, borderColor: c.hairSoft, paddingVertical: space(1), paddingHorizontal: space(1.5) },
   chatTabOn: { borderColor: c.gold, backgroundColor: c.goldWash },
   chatTabText: { fontFamily: font.bodyMedium, fontSize: 12, color: c.textFaint },
   chatTabTextOn: { color: c.gold },
   deleteChat: { justifyContent: 'center', paddingHorizontal: space(1) },
   deleteChatText: { fontFamily: font.bodyMedium, fontSize: 12, color: c.rose },
+  newChat: { justifyContent: 'center', paddingHorizontal: space(1) },
+  newChatText: { fontFamily: font.bodyMedium, fontSize: 12, color: c.gold },
 
   askedRow: { marginTop: space(3), marginHorizontal: space(3), alignItems: 'flex-end' },
   askedBubble: { maxWidth: '78%', borderRadius: 18, borderBottomRightRadius: 4, backgroundColor: 'rgba(255,255,255,.07)', paddingVertical: space(1.75), paddingHorizontal: space(2) },

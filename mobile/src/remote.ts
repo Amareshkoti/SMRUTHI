@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import type { Fact, IngestedDocument, Language } from './api';
 import type { StoredDocument } from './db';
+import { recordIdentity } from './reportIdentity';
 
 /**
  * Supabase is the source of truth. Every query here is scoped to the signed-in
@@ -42,15 +43,35 @@ interface FactRow {
 }
 
 
-export async function pushDocument(userId: string | null, doc: IngestedDocument): Promise<void> {
+export async function pushDocument(userId: string | null, doc: IngestedDocument, personId: string | null = null): Promise<void> {
   const uid = requireUserId(userId);
 
   const { data: session } = await supabase.auth.getSession();
   if (session.session?.user.id !== uid) throw new Error('Your account changed. Please retry.');
-  const { error } = await supabase.rpc('save_report', { report: doc });
+  const { error } = await supabase.rpc('save_report', { report: { ...doc, personId } });
   if (error) throw new Error(error.code === 'PGRST202'
     ? 'Database update required: apply migration 0003_atomic_records.sql before uploading.'
     : 'Could not save this report. Your existing results have been preserved.');
+}
+
+export async function hasUploadedFile(userId: string, sourceId: string): Promise<boolean> {
+  const { data, error } = await supabase.from('documents').select('id')
+    .eq('user_id', userId).eq('source_id', sourceId).limit(1);
+  if (error) throw new Error('Could not check your existing reports. Please retry when connected.');
+  return Boolean(data?.length);
+}
+
+export async function hasMatchingRecord(facts: Fact[]): Promise<boolean> {
+  const existing = await fetchFacts();
+  const groups = new Map<string, Fact[]>();
+  for (const fact of existing) {
+    if (!fact.docId) continue;
+    const group = groups.get(fact.docId) ?? [];
+    group.push(fact);
+    groups.set(fact.docId, group);
+  }
+  const identity = recordIdentity(facts);
+  return [...groups.values()].some(group => recordIdentity(group) === identity);
 }
 
 export async function fetchDocuments(): Promise<StoredDocument[]> {

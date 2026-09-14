@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, ScrollView, Modal, Keyboard } from '
 import { c, font, space, type } from '../theme';
 import type { Language } from '../api';
 
-export type View5 = 'home' | 'signal' | 'memory' | 'ask' | 'vault';
+export type View5 = 'home' | 'signal' | 'memory' | 'ask' | 'vault' | 'family';
 
 const NAV: { key: Exclude<View5, 'signal'>; label: string }[] = [
   { key: 'home', label: 'Home' },
