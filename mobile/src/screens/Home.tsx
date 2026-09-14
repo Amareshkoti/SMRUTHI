@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { c, font, space, type } from '../theme';
 import { Screen, LanguagePicker } from '../components/Chrome';
+import { PulseSheet } from '../components/PulseSheet';
 import { Sparkline } from '../components/Sparkline';
 import { fmt } from '../insightDisplay';
 import { formatWarning, isSafeWarningMessage, type Fact, type Insight, type Language } from '../api';
@@ -17,6 +18,9 @@ export function HomeScreen({
   onLanguage,
   onOpenSignal,
   onOpenVault,
+  userId,
+  onSavedRecord,
+  onOpenAsk,
 }: {
   documents: StoredDocument[];
   facts: Fact[];
@@ -27,8 +31,12 @@ export function HomeScreen({
   onLanguage: (l: Language) => void;
   onOpenSignal: (analyte: string) => void;
   onOpenVault: () => void;
+  userId?: string | null;
+  onSavedRecord?: () => void;
+  onOpenAsk?: () => void;
 }) {
   const [showOtherTrends, setShowOtherTrends] = useState(false);
+  const [pulseOpen, setPulseOpen] = useState(false);
   const top = warning?.insight ?? null;
   const watch = !top ? insights.find((i) => i.severity === 'info') ?? null : null;
   const empty = documents.length === 0;
@@ -172,6 +180,21 @@ export function HomeScreen({
         <Stat value={String(labCount)} label="labs" />
       </View>
 
+      <Pressable onPress={() => setPulseOpen(true)} style={styles.pulseCard} accessibilityRole="button">
+        <View>
+          <Text style={styles.pulseCardTitle}>Measure your pulse</Text>
+          <Text style={styles.pulseCardSub}>Camera + flash · about 20 seconds</Text>
+        </View>
+        <Text style={styles.pulseCardArrow}>→</Text>
+      </Pressable>
+      <PulseSheet
+        open={pulseOpen}
+        onClose={() => setPulseOpen(false)}
+        userId={userId}
+        onSavedRecord={onSavedRecord}
+        onOpenAsk={onOpenAsk}
+      />
+
       {others.length > 0 ? (
         <>
           <Text style={styles.sectionLabel}>EVERYTHING ELSE MOVING</Text>
@@ -262,6 +285,16 @@ const styles = StyleSheet.create({
   emptyBody: { fontFamily: font.body, fontSize: 14, lineHeight: 23, color: c.textMuted, marginTop: space(1.25) },
 
   statsRow: { flexDirection: 'row', gap: space(1.25), marginTop: space(2.25), marginHorizontal: space(3) },
+
+  pulseCard: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: space(1.25), marginHorizontal: space(3), borderRadius: 16,
+    backgroundColor: c.surface, borderWidth: 1, borderColor: c.hair,
+    paddingVertical: space(1.75), paddingHorizontal: space(2.25),
+  },
+  pulseCardTitle: { fontFamily: font.bodyMedium, fontSize: 15, color: c.text },
+  pulseCardSub: { fontFamily: font.body, fontSize: 12, color: c.textFaint, marginTop: 2 },
+  pulseCardArrow: { fontFamily: font.body, fontSize: 16, color: c.gold },
   stat: { flex: 1, borderRadius: 16, backgroundColor: c.surface, borderWidth: 1, borderColor: c.hair, paddingVertical: space(2), paddingHorizontal: space(1.75) },
   statValue: { fontFamily: font.displayRegular, fontSize: 26, color: c.text },
   statLabel: { fontFamily: font.body, fontSize: 11, color: c.textFaint, marginTop: 2 },

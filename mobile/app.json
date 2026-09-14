@@ -25,7 +25,14 @@
     "plugins": [
       "expo-sqlite",
       "expo-secure-store",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "SMRUTI uses the camera to estimate your pulse from your fingertip, and to photograph reports you add."
+        }
+      ],
+      "expo-sharing"
     ],
     "scheme": "smruti",
     "backgroundColor": "#0B0E11",

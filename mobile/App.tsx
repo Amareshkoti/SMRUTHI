@@ -189,6 +189,9 @@ export default function App() {
               onLanguage={setLanguage}
               onOpenSignal={openSignal}
               onOpenVault={() => setView('vault')}
+              userId={userId}
+              onSavedRecord={() => void refresh()}
+              onOpenAsk={() => setView('ask')}
             />
           )}
           {view === 'signal' && focusedInsight && (

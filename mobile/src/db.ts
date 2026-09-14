@@ -248,6 +248,35 @@ export async function clearCache(userId: string): Promise<void> {
   }
   });
 }
+/** Inserts a local checkup document and its extracted vitals into SQLite cache */
+export async function saveCheckupDocument(
+  userId: string,
+  doc: StoredDocument,
+  facts: Fact[],
+): Promise<void> {
+  if (!localCacheIsAvailable()) return;
+  return cacheJob(async () => {
+    const db = await open();
+    await db.withTransactionAsync(async () => {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO documents
+           (id, user_id, title, source_name, doc_date, hospital, doctor, fact_count, added_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        doc.id, userId, doc.title, doc.source_name, doc.doc_date, doc.hospital, doc.doctor, doc.fact_count, doc.added_at,
+      );
+      for (const f of facts) {
+        await db.runAsync(
+          `INSERT INTO facts
+             (user_id, doc_id, date, analyte, analyte_printed, value, unit, ref_low, ref_high, ref_low_inclusive, ref_high_inclusive, doctor, hospital)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          userId, f.docId ?? doc.id, f.date, f.analyte, f.analyteAsPrinted, f.value, f.unit,
+          f.refLow, f.refHigh, f.refLowInclusive === false ? 0 : 1, f.refHighInclusive === false ? 0 : 1, f.doctor, f.hospital,
+        );
+      }
+    });
+  });
+}
+
 /** Serialize all reads and transactions, including sign-out, on the single SQLite connection. */
 let cacheQueue: Promise<unknown> = Promise.resolve();
 function cacheJob<T>(work: () => Promise<T>): Promise<T> {
