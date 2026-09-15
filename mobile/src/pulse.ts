@@ -21,6 +21,7 @@ import { estimateCalibratedBp, type BpCalibration } from './bpCalibration';
 export interface PulseSample {
   t: number;
   value: number;
+  green?: number;
 }
 
 const MIN_BPM = 40;
@@ -50,7 +51,7 @@ export function classifyBpm(bpm: number): BpmRange {
 }
 
 /** Average red-channel intensity of a captured JPEG frame. Red carries the strongest PPG signal under a red/white LED flash. */
-export function frameBrightness(base64: string): number | null {
+export function frameBrightness(base64: string): { red: number; green: number } | null {
   try {
     let bytes = base64ToBytes(base64);
     if (bytes.length < 4) return null;
@@ -92,7 +93,7 @@ export function frameBrightness(base64: string): number | null {
       return null; // Not a fingertip covering the camera + flash
     }
 
-    return avgRed;
+    return { red: avgRed, green: avgGreen };
   } catch {
     // Malformed or incomplete frames are gracefully dropped without crashing or warning
     return null;
@@ -142,7 +143,7 @@ export function estimateBpm(samples: PulseSample[], calibration?: BpCalibration 
   const rawGrid = resample(samples, t0, duration, RESAMPLE_HZ);
 
   // Fingertip presence check across resampled grid
-  const meanBrightness = rawGrid.reduce((a, b) => a + b, 0) / rawGrid.length;
+  const meanBrightness = rawGrid.red.reduce((a, b) => a + b, 0) / rawGrid.red.length;
   if (meanBrightness < 95) {
     return {
       bpm: null,
@@ -165,24 +166,29 @@ export function estimateBpm(samples: PulseSample[], calibration?: BpCalibration 
 }
 
 /** Analyzes a specific slice of resampled PPG data */
-function analyzeSignalWindow(grid: number[], hz: number, calibration?: BpCalibration | null): PulseAnalysisResult | null {
-  if (grid.length < hz * 5) return null; // Need at least 5 seconds
+function analyzeSignalWindow(grid: { red: number[], green: number[] }, hz: number, calibration?: BpCalibration | null): PulseAnalysisResult | null {
+  if (grid.red.length < hz * 5) return null; // Need at least 5 seconds
 
   // 1. Clamp sudden motion spikes (derivative outlier rejection)
-  const clamped = clampMotionSpikes(grid);
+  const clamped = clampMotionSpikes(grid.red);
+  const clampedGreen = clampMotionSpikes(grid.green);
 
   // 2. Apply 2nd-order Butterworth Bandpass Filter (0.7 Hz to 3.5 Hz)
   const filtered = applyBandpass(clamped, hz, 0.7, 3.5);
+  const filteredGreen = applyBandpass(clampedGreen, hz, 0.7, 3.5);
 
   // In reflective PPG, higher blood volume reduces reflected light (negative peaks).
   // Invert so systolic surges point upwards.
   const inverted = filtered.map((v) => -v);
+  const invertedGreen = filteredGreen.map((v) => -v);
 
   // Discard first 0.8s filter settling transient
   const settlingSamples = Math.min(Math.floor(hz * 0.8), Math.floor(inverted.length / 4));
   const validSignal = inverted.slice(settlingSamples);
+  const validGreen = invertedGreen.slice(settlingSamples);
 
   const amplitude = Math.max(...validSignal) - Math.min(...validSignal);
+  const amplitudeGreen = Math.max(...validGreen) - Math.min(...validGreen);
   if (amplitude < 0.05) {
     return null; // Signal is flat / camera not covered
   }
@@ -367,6 +373,39 @@ function analyzeSignalWindow(grid: number[], hz: number, calibration?: BpCalibra
   // removes). Detected independently below from the pre-bandpass clamped signal.
   const estimatedRespirationRate = estimateRespirationRateRSA(clamped, hz);
 
+  // SpO2 Estimation using Red/Green AC/DC Ratio
+  const localDCGreen = clampedGreen.slice(settlingSamples).reduce((a, b) => a + b, 0) / (clampedGreen.length - settlingSamples);
+  let estimatedSpO2: number | null = null;
+  if (localDC > 0 && localDCGreen > 0 && amplitude > 0 && amplitudeGreen > 0) {
+    const ratioRed = amplitude / localDC;
+    const ratioGreen = amplitudeGreen / localDCGreen;
+    const R = ratioRed / ratioGreen;
+    let spo2 = Math.round(110 - 25 * R);
+    if (spo2 > 100) spo2 = 100;
+    if (spo2 >= 90) estimatedSpO2 = spo2;
+  }
+
+  // pNN20 (Percentage of successive RR intervals differing by >20ms)
+  let pnn20: number | null = null;
+  if (cleanIntervals.length > 1) {
+    let over20 = 0;
+    for (let i = 1; i < cleanIntervals.length; i++) {
+      if (Math.abs(cleanIntervals[i]! - cleanIntervals[i - 1]!) * 1000 > 20) over20++;
+    }
+    pnn20 = Math.round((over20 / (cleanIntervals.length - 1)) * 100);
+  }
+
+  // LF/HF Ratio (Heuristic surrogate from time-domain variance)
+  let lfHfRatio: number | null = null;
+  if (rmssd !== null && sdnn > 0) {
+    const hfVar = rmssd * rmssd;
+    const totalVar = sdnn * sdnn;
+    const lfVar = Math.max(0, totalVar - hfVar);
+    if (hfVar > 0) {
+      lfHfRatio = Number((lfVar / hfVar).toFixed(2));
+    }
+  }
+
   const testItems: CheckupTestItem[] = [
     { id: 'hr', category: 'Cardiovascular', name: 'Resting Heart Rate', value: bpm, unit: 'bpm', range: '60 - 100 bpm', status: bpm >= 60 && bpm <= 100 ? 'Normal' : bpm < 60 ? 'Optimal' : 'Elevated' },
     { id: 'rmssd', category: 'Autonomic & HRV', name: 'HRV Parasympathetic (RMSSD)', value: rmssd ?? 'n/a', unit: 'ms', range: '25 - 75 ms', status: rmssd === null ? 'Normal' : rmssd >= 25 ? 'Normal' : 'Borderline' },
@@ -393,6 +432,16 @@ function analyzeSignalWindow(grid: number[], hz: number, calibration?: BpCalibra
     testItems.push({ id: 'resp', category: 'Respiratory', name: 'Respiration Rate', value: estimatedRespirationRate, unit: 'breaths/min', range: '12 - 20 br/min', status: estimatedRespirationRate >= 12 && estimatedRespirationRate <= 20 ? 'Normal' : 'Borderline' });
   }
 
+  if (estimatedSpO2 !== null) {
+    testItems.push({ id: 'spo2', category: 'Respiratory', name: 'Blood Oxygen (SpO2 Est.)', value: estimatedSpO2, unit: '%', range: '95 - 100 %', status: estimatedSpO2 >= 95 ? 'Normal' : 'Borderline' });
+  }
+  if (pnn20 !== null) {
+    testItems.push({ id: 'pnn20', category: 'Autonomic & HRV', name: 'HRV pNN20', value: pnn20, unit: '%', range: '> 20 %', status: pnn20 >= 20 ? 'Normal' : 'Borderline' });
+  }
+  if (lfHfRatio !== null) {
+    testItems.push({ id: 'lf_hf', category: 'Autonomic & HRV', name: 'LF/HF Ratio (Surrogate)', value: lfHfRatio, unit: 'ratio', range: '1.0 - 2.0', status: lfHfRatio >= 1.0 && lfHfRatio <= 2.0 ? 'Normal' : 'Borderline' });
+  }
+
   // Blood Pressure: only computed when the user has calibrated against a real cuff
   // reading (see bpCalibration.ts). Without that anchor, no formula from this signal
   // alone can produce a trustworthy mmHg value, so it's omitted rather than guessed.
@@ -407,6 +456,16 @@ function analyzeSignalWindow(grid: number[], hz: number, calibration?: BpCalibra
       testItems.push({ id: 'bp_dia', category: 'Cardiovascular', name: 'Blood Pressure (Diastolic, Calibrated Est.)', value: diastolic, unit: 'mmHg', range: '60 - 80 mmHg', status: bpStatus });
       testItems.push({ id: 'map', category: 'Cardiovascular', name: 'Mean Arterial Pressure (MAP)', value: map, unit: 'mmHg', range: '70 - 100 mmHg', status: bpStatus });
       testItems.push({ id: 'pp', category: 'Cardiovascular', name: 'Pulse Pressure', value: pulsePressure, unit: 'mmHg', range: '30 - 50 mmHg', status: pulsePressure >= 30 && pulsePressure <= 50 ? 'Normal' : 'Borderline' });
+      
+      const rpp = bpm * systolic;
+      testItems.push({ id: 'rpp', category: 'Cardiovascular', name: 'Cardiac Workload (RPP)', value: rpp, unit: 'mmHg·bpm', range: '< 10000', status: rpp < 10000 ? 'Optimal' : rpp <= 12000 ? 'Normal' : 'Elevated' });
+      
+      const sv = Math.round(pulsePressure * 1.5);
+      testItems.push({ id: 'sv', category: 'Cardiovascular', name: 'Stroke Volume (Estimated)', value: sv, unit: 'mL', range: '60 - 100 mL', status: sv >= 60 && sv <= 100 ? 'Normal' : 'Borderline' });
+      
+      const co = Number(((sv * bpm) / 1000).toFixed(1));
+      testItems.push({ id: 'co', category: 'Cardiovascular', name: 'Cardiac Output (Estimated)', value: co, unit: 'L/min', range: '4.0 - 8.0 L/min', status: co >= 4.0 && co <= 8.0 ? 'Normal' : 'Borderline' });
+
       testItems.push({
         id: 'bp_cal_age',
         category: 'Signal Quality',
@@ -526,13 +585,16 @@ export function buildCheckupFacts(analysis: PulseAnalysisResult, docId: string, 
 }
 
 /** If the user moved their finger momentarily, scans overlapping 9-second sub-windows for a stable reading */
-function analyzeSignalSubwindows(grid: number[], hz: number, calibration?: BpCalibration | null): PulseAnalysisResult | null {
+function analyzeSignalSubwindows(grid: { red: number[], green: number[] }, hz: number, calibration?: BpCalibration | null): PulseAnalysisResult | null {
   const windowLen = hz * 9; // 9-second window
   const step = hz * 3;     // 3-second step
   let bestResult: PulseAnalysisResult | null = null;
 
-  for (let start = 0; start + windowLen <= grid.length; start += step) {
-    const slice = grid.slice(start, start + windowLen);
+  for (let start = 0; start + windowLen <= grid.red.length; start += step) {
+    const slice = {
+      red: grid.red.slice(start, start + windowLen),
+      green: grid.green.slice(start, start + windowLen)
+    };
     const result = analyzeSignalWindow(slice, hz, calibration);
     if (result?.bpm) {
       bestResult = result;
@@ -607,9 +669,10 @@ function filterIIR(data: number[], b: [number, number, number], a: [number, numb
 }
 
 /** Linear interpolation onto a uniform grid -- the capture loop's timing jitters with camera latency. */
-function resample(samples: PulseSample[], t0: number, duration: number, hz: number): number[] {
+function resample(samples: PulseSample[], t0: number, duration: number, hz: number): { red: number[], green: number[] } {
   const n = Math.max(1, Math.floor(duration * hz));
-  const grid = new Array<number>(n);
+  const red = new Array<number>(n);
+  const green = new Array<number>(n);
   let si = 0;
   for (let i = 0; i < n; i++) {
     const time = t0 + (i / hz) * 1000;
@@ -618,7 +681,10 @@ function resample(samples: PulseSample[], t0: number, duration: number, hz: numb
     const b = samples[Math.min(si + 1, samples.length - 1)]!;
     const span = b.t - a.t;
     const frac = span > 0 ? (time - a.t) / span : 0;
-    grid[i] = a.value + (b.value - a.value) * frac;
+    red[i] = a.value + (b.value - a.value) * frac;
+    const aGreen = a.green ?? a.value;
+    const bGreen = b.green ?? b.value;
+    green[i] = aGreen + (bGreen - aGreen) * frac;
   }
-  return grid;
+  return { red, green };
 }

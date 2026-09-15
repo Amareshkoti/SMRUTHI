@@ -259,8 +259,8 @@ export function PulseSheet({
           });
           if (pic?.base64) {
             const brightness = frameBrightness(pic.base64);
-            if (brightness !== null && brightness > 0) {
-              samplesRef.current.push({ t: Date.now(), value: brightness });
+            if (brightness !== null && brightness.red > 0) {
+              samplesRef.current.push({ t: Date.now(), value: brightness.red, green: brightness.green });
             }
           }
         } catch {
