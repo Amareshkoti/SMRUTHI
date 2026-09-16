@@ -31,6 +31,15 @@ jobs:
         working-directory: mobile
         run: npm install
 
+      - name: Generate Environment Variables
+        working-directory: mobile
+        run: |
+          echo "EXPO_PUBLIC_SUPABASE_URL=${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}" >> .env
+          echo "EXPO_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}" >> .env
+          echo "EXPO_PUBLIC_VAPI_PUBLIC_KEY=${{ secrets.EXPO_PUBLIC_VAPI_PUBLIC_KEY }}" >> .env
+          echo "EXPO_PUBLIC_VAPI_ASSISTANT_ID=${{ secrets.EXPO_PUBLIC_VAPI_ASSISTANT_ID }}" >> .env
+          echo "EXPO_PUBLIC_NVIDIA_API_KEY=${{ secrets.EXPO_PUBLIC_NVIDIA_API_KEY }}" >> .env
+
       - name: Expo Prebuild
         working-directory: mobile
         run: npx expo prebuild --platform android
