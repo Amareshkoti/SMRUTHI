@@ -21,4 +21,13 @@ export const api = {
     const insights = detectLocalTrends(facts);
     return { insights, answer: await answerQuestion({ question, facts, insights, language, history }) };
   },
+  faceDiagnosis: async (base64Image: string, language: Language) => {
+    const { analyzeFaceOnDevice } = await import('./faceDiagnosis');
+    // We do this off the main thread or simply await since it takes a moment
+    return new Promise<string>((resolve) => {
+      setTimeout(() => {
+        resolve(analyzeFaceOnDevice(base64Image, language));
+      }, 50);
+    });
+  },
 };

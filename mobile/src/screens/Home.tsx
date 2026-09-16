@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { c, font, space, type } from '../theme';
 import { Screen, LanguagePicker } from '../components/Chrome';
 import { PulseSheet } from '../components/PulseSheet';
+import { FaceDiagnosisSheet } from '../components/FaceDiagnosisSheet';
 import { Sparkline } from '../components/Sparkline';
 import { fmt } from '../insightDisplay';
 import { formatWarning, isSafeWarningMessage, type Fact, type Insight, type Language } from '../api';
@@ -37,6 +38,7 @@ export function HomeScreen({
 }) {
   const [showOtherTrends, setShowOtherTrends] = useState(false);
   const [pulseOpen, setPulseOpen] = useState(false);
+  const [faceDiagnosisOpen, setFaceDiagnosisOpen] = useState(false);
   const top = warning?.insight ?? null;
   const watch = !top ? insights.find((i) => i.severity === 'info') ?? null : null;
   const empty = documents.length === 0;
@@ -193,6 +195,19 @@ export function HomeScreen({
         userId={userId}
         onSavedRecord={onSavedRecord}
         onOpenAsk={onOpenAsk}
+      />
+
+      <Pressable onPress={() => setFaceDiagnosisOpen(true)} style={styles.pulseCard} accessibilityRole="button">
+        <View>
+          <Text style={styles.pulseCardTitle}>Chinese Face Diagnosis</Text>
+          <Text style={styles.pulseCardSub}>TCM analysis using front camera</Text>
+        </View>
+        <Text style={styles.pulseCardArrow}>→</Text>
+      </Pressable>
+      <FaceDiagnosisSheet
+        open={faceDiagnosisOpen}
+        onClose={() => setFaceDiagnosisOpen(false)}
+        language={language}
       />
 
       {others.length > 0 ? (
