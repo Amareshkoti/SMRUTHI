@@ -13,95 +13,170 @@
 | Stage | Module / File | Engineering Operation | Physiological / Signal Objective |
 | :--- | :--- | :--- | :--- |
 | **1. Optical Capture** | PulseSheet.tsx CameraView | Captures camera frames at 10-15 FPS with flash enabled, skipProcessing=true. | Transilluminates capillary beds of fingertip dermis; captures time-series optical backscatter. |
-| **2. Tissue Verification** | pulse.ts rameBrightness() | Subsamples frame red and green channels. Enforces avgRed >= 95 and avgRed >= 1.15 * avgGreen. | Prevents mathematical aliasing from ambient AC lighting. |
-| **3. Temporal Resampling** | pulse.ts 
-esample() | Linear interpolation of timestamped luminance samples onto a uniform 20 Hz temporal grid. | Eliminates capture jitter, fulfilling the strict equidistant time requirement for digital filtering. |
+| **2. Tissue Verification** | pulse.ts frameBrightness() | Subsamples frame red and green channels. Enforces avgRed >= 95 and avgRed >= 1.15 * avgGreen. | Prevents mathematical aliasing from ambient AC lighting. |
+| **3. Temporal Resampling** | pulse.ts resample() | Linear interpolation of timestamped luminance samples onto a uniform 20 Hz temporal grid. | Eliminates capture jitter, fulfilling the strict equidistant time requirement for digital filtering. |
 | **4. Outlier Clamping** | pulse.ts clampMotionSpikes() | Derivative thresholding: clamps step changes exceeding 3.5x the median absolute first difference. | Suppresses mechanical motion artifacts caused by transient finger slip. |
-| **5. Bandpass Filter** | pulse.ts pplyBandpass() | Zero-mean centering + 2nd-order Butterworth cascaded highpass (0.7 Hz) and lowpass (3.5 Hz). | Isolates cardiac pulsatile frequencies; rejects DC respiratory baseline wander and noise. |
-| **6. Optical Inversion** | pulse.ts nalyzeSignalWindow()| Signal polarity inversion: s[n] = -filtered[n]. | Beer-Lambert Law alignment: systolic capillary blood expansion absorbs more light; inversion makes pulses positive peaks. |
-| **7. Peak & Beat Detection** | pulse.ts nalyzeSignalWindow()| Local maxima search with refractory distance constraint (>= 0.35s) and adaptive prominence. | Extracts true systolic peaks while preventing double-counting of dicrotic notches. |
-| **8. Interval Filtering** | pulse.ts nalyzeSignalWindow()| Derives RR intervals; rejects intervals with instantaneous BPM outside [40, 200]. | Guarantees high-fidelity Inter-Beat Interval (IBI) series for downstream autonomic HRV computation. |
+| **5. Bandpass Filter** | pulse.ts applyBandpass() | Zero-mean centering + 2nd-order Butterworth cascaded highpass (0.7 Hz) and lowpass (3.5 Hz). | Isolates cardiac pulsatile frequencies; rejects DC respiratory baseline wander and noise. |
+| **6. Optical Inversion** | pulse.ts analyzeSignalWindow()| Signal polarity inversion: s[n] = -filtered[n]. | Beer-Lambert Law alignment: systolic capillary blood expansion absorbs more light; inversion makes pulses positive peaks. |
+| **7. Peak & Beat Detection** | pulse.ts analyzeSignalWindow()| Local maxima search with refractory distance constraint (>= 0.35s) and adaptive prominence. | Extracts true systolic peaks while preventing double-counting of dicrotic notches. |
+| **8. Interval Filtering** | pulse.ts analyzeSignalWindow()| Derives RR intervals; rejects intervals with instantaneous BPM outside [40, 200]. | Guarantees high-fidelity Inter-Beat Interval (IBI) series for downstream autonomic HRV computation. |
 
 ---
 
 ### 2. Mathematical Formulas & Algorithmic Formulations
 
-Every formula utilized across the mobile application and research testbench is itemized below with exact parameter definitions.
+Every formula used across the mobile application and the research testbench is itemised
+below with exact parameter definitions. Sampling rate is $f_s = 20\ \mathrm{Hz}$ after
+resampling; $N$ denotes a sample count and $M$ the number of usable RR intervals.
 
 #### 2.1 Optical Tissue Verification & Subsampled Luminance
-`	ext
-avgRed = (1 / N) * sum(I_red[i * 4 * stride])
-avgGreen = (1 / N) * sum(I_green[i * 4 * stride + 1])
-Valid Tissue = (avgRed >= 95) and (avgRed >= 1.15 * avgGreen)
-`
+
+The decoded frame is an RGBA buffer, so channel $c$ of pixel $k$ lies at byte $4k + c$.
+With a subsample factor $s$:
+
+$$
+\bar{I}_{\text{red}} \;=\; \frac{1}{N}\sum_{k=0}^{N-1} I\!\left[4sk\right],
+\qquad
+\bar{I}_{\text{green}} \;=\; \frac{1}{N}\sum_{k=0}^{N-1} I\!\left[4sk+1\right]
+$$
+
+A frame is accepted as fingertip tissue only when both conditions hold:
+
+$$
+\textsf{valid} \iff \left(\bar{I}_{\text{red}} \ge 95\right) \;\wedge\;
+\left(\bar{I}_{\text{red}} \ge 1.15\,\bar{I}_{\text{green}}\right)
+$$
 
 #### 2.2 Uniform Temporal Resampling (Linear Interpolation)
-`	ext
-y(t_k) = y(t_i) + [ y(t_{i+1}) - y(t_i) ] * [ (t_k - t_i) / (t_{i+1} - t_i) ]
-`
+
+For a target instant $t_k$ bracketed by acquired samples $t_i \le t_k < t_{i+1}$:
+
+$$
+y(t_k) \;=\; y(t_i) \;+\; \bigl[\,y(t_{i+1}) - y(t_i)\,\bigr]\cdot
+\frac{t_k - t_i}{t_{i+1} - t_i}
+$$
 
 #### 2.3 Derivative-Based Outlier Clamping (Motion Artefact Reduction)
-`	ext
-delta_x[i] = |x[i] - x[i-1]|
-medDiff = median({delta_x[i]})
-T_clamp = max(3.0, 3.5 * medDiff)
-x*[i] = x*[i-1] + sign(x[i] - x*[i-1]) * T_clamp   [if |x[i] - x*[i-1]| > T_clamp]
-`
 
-#### 2.4 2nd-Order Butterworth Bandpass IIR Filter (Biquad Formulation)
-`	ext
-theta = (pi * f_c) / f_s
-beta = 0.5 * [ (1 - (d/2)*sin(theta)) / (1 + (d/2)*sin(theta)) ]
-gamma = (0.5 + beta) * cos(theta)
-Difference Equation: y[n] = b_0*x[n] + b_1*x[n-1] + b_2*x[n-2] - a_1*y[n-1] - a_2*y[n-2]
-`
+$$
+\Delta x[i] \;=\; \bigl|\,x[i] - x[i-1]\,\bigr|,
+\qquad
+T \;=\; \max\!\Bigl(3.0,\; 3.5 \cdot \operatorname{median}_i\bigl(\Delta x[i]\bigr)\Bigr)
+$$
 
-#### 2.5 Heart Rate (BPM) and Dynamic Instantaneous Range
-`	ext
-RR[k] = (peak[k] - peak[k-1]) / f_s   [seconds]
-Heart Rate = round( 60.0 / median({RR_clean}) )
-`
+$$
+x^{*}[i] \;=\;
+\begin{cases}
+x^{*}[i-1] + \operatorname{sgn}\!\bigl(x[i] - x^{*}[i-1]\bigr)\cdot T,
+  & \bigl|x[i] - x^{*}[i-1]\bigr| > T \[6pt]
+x[i], & \text{otherwise}
+\end{cases}
+$$
 
-#### 2.6 Heart Rate Variability (HRV): RMSSD, SDNN, pNN50 & pNN20
-`	ext
-RMSSD = sqrt( (1 / (M - 1)) * sum (RR[k+1] - RR[k])^2 ) * 1000 [ms]
-SDNN = sqrt( (1 / M) * sum (RR[k] - mean(RR))^2 ) * 1000 [ms]
-pNN50 = [ (Count of |RR[k+1] - RR[k]| > 50 ms) / (M - 1) ] * 100 [%]
-pNN20 = [ (Count of |RR[k+1] - RR[k]| > 20 ms) / (M - 1) ] * 100 [%]
-`
+#### 2.4 Second-Order Butterworth Bandpass IIR Filter (Biquad Formulation)
 
-#### 2.7 Autonomic Stress Score & Autonomic State Classification
-`	ext
-Stress Score = clamp( 15 + max(0, 50 - RMSSD) * 1.8, 10, 95 ) [%]
-`
+With cutoff $f_c$, damping $d = \sqrt{2}$, and passband $0.7\text{--}3.5\ \mathrm{Hz}$:
+
+$$
+\theta \;=\; \frac{\pi f_c}{f_s},
+\qquad
+\beta \;=\; \frac{1}{2}\cdot
+\frac{1 - \frac{d}{2}\sin\theta}{1 + \frac{d}{2}\sin\theta},
+\qquad
+\gamma \;=\; \left(\tfrac{1}{2} + \beta\right)\cos\theta
+$$
+
+The cascaded sections are applied through the standard difference equation:
+
+$$
+y[n] \;=\; b_0\,x[n] + b_1\,x[n-1] + b_2\,x[n-2]
+\;-\; a_1\,y[n-1] \;-\; a_2\,y[n-2]
+$$
+
+#### 2.5 Heart Rate (BPM) from Peak Intervals
+
+For detected peak indices $p[k]$:
+
+$$
+RR[k] \;=\; \frac{p[k] - p[k-1]}{f_s}\ \ [\mathrm{s}],
+\qquad
+\mathrm{HR} \;=\; \operatorname{round}\!\left(
+\frac{60}{\operatorname{median}\bigl(RR_{\text{clean}}\bigr)}\right)\ [\mathrm{bpm}]
+$$
+
+#### 2.6 Heart Rate Variability: RMSSD, SDNN, pNN50 & pNN20
+
+$$
+\mathrm{RMSSD} \;=\; 1000\sqrt{\frac{1}{M-1}
+\sum_{k=1}^{M-1}\bigl(RR[k+1] - RR[k]\bigr)^{2}}\ \ [\mathrm{ms}]
+$$
+
+$$
+\mathrm{SDNN} \;=\; 1000\sqrt{\frac{1}{M}
+\sum_{k=1}^{M}\bigl(RR[k] - \overline{RR}\bigr)^{2}}\ \ [\mathrm{ms}]
+$$
+
+$$
+\mathrm{pNN}x \;=\;
+\frac{\bigl|\{\,k \;:\; |RR[k+1] - RR[k]| > x\ \mathrm{ms}\,\}\bigr|}{M-1}
+\times 100\ \ [\%], \qquad x \in \{20,\,50\}
+$$
+
+#### 2.7 Autonomic Stress Score
+
+$$
+S \;=\; \operatorname{clamp}\!\Bigl(
+15 + 1.8\cdot\max\bigl(0,\; 50 - \mathrm{RMSSD}\bigr),\;\; 10,\;\; 95
+\Bigr)\ \ [\%]
+$$
 
 #### 2.8 Systolic Upstroke Time (Foot-to-Peak) & Vascular Elasticity
-`	ext
-foot_idx = argmin s[j]   for j in [peak - floor(0.4*f_s), peak]
-T_up = ( (peak - foot_idx) / f_s ) * 1000 [ms]
-Optimal Elasticity: T_up >= 130 ms | Elevated Stiffness: T_up < 105 ms
-`
 
-#### 2.9 Blood Oxygen Saturation (SpO2 Estimation via Ratio of Ratios)
-`	ext
-Ratio (R) = (AC_red / DC_red) / (AC_green / DC_green)
-SpO2 = round(110 - 25 * R) [%]
-`
+$$
+j_{\text{foot}} \;=\; \operatorname*{arg\,min}_{\,j \,\in\, [\,p - \lfloor 0.4 f_s \rfloor,\; p\,]} s[j],
+\qquad
+T_{\text{up}} \;=\; \frac{p - j_{\text{foot}}}{f_s}\times 1000\ \ [\mathrm{ms}]
+$$
 
-#### 2.10 LF/HF Ratio (Frequency Domain HRV Surrogate)
-`	ext
-LF_var = max(0, SDNN^2 - RMSSD^2)
-HF_var = RMSSD^2
-LF/HF Ratio = LF_var / HF_var
-`
+$$
+\text{Optimal elasticity: } T_{\text{up}} \ge 130\ \mathrm{ms}
+\qquad
+\text{Elevated stiffness: } T_{\text{up}} < 105\ \mathrm{ms}
+$$
 
-#### 2.11 Stroke Volume (SV) & Cardiac Output (CO) & Cardiac Workload (RPP)
-`	ext
-Pulse Pressure (PP) = Systolic_BP - Diastolic_BP
-Stroke Volume (SV) = round( PP * 1.5 ) [mL]
-Cardiac Output (CO) = (SV * BPM) / 1000 [L/min]
-Cardiac Workload (RPP) = BPM * Systolic_BP [mmHg.bpm]
-`
+#### 2.9 Blood Oxygen Saturation (SpO$_2$ via Ratio of Ratios)
+
+$$
+R \;=\; \frac{AC_{\text{red}} / DC_{\text{red}}}{AC_{\text{green}} / DC_{\text{green}}},
+\qquad
+\mathrm{SpO_2} \;=\; \operatorname{round}\bigl(110 - 25R\bigr)\ \ [\%]
+$$
+
+#### 2.10 LF/HF Ratio (Frequency-Domain HRV Surrogate)
+
+$$
+\sigma^{2}_{LF} \;=\; \max\!\bigl(0,\; \mathrm{SDNN}^{2} - \mathrm{RMSSD}^{2}\bigr),
+\qquad
+\sigma^{2}_{HF} \;=\; \mathrm{RMSSD}^{2}
+$$
+
+$$
+\frac{LF}{HF} \;=\; \frac{\sigma^{2}_{LF}}{\sigma^{2}_{HF}}
+$$
+
+#### 2.11 Stroke Volume, Cardiac Output & Cardiac Workload
+
+$$
+PP \;=\; BP_{\text{sys}} - BP_{\text{dia}}\ \ [\mathrm{mmHg}],
+\qquad
+SV \;=\; \operatorname{round}\bigl(1.5\cdot PP\bigr)\ \ [\mathrm{mL}]
+$$
+
+$$
+CO \;=\; \frac{SV \cdot \mathrm{HR}}{1000}\ \ [\mathrm{L/min}],
+\qquad
+RPP \;=\; \mathrm{HR}\cdot BP_{\text{sys}}\ \ [\mathrm{mmHg\cdot bpm}]
+$$
 
 ---
 

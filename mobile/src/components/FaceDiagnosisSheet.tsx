@@ -1,11 +1,26 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Dimensions, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Dimensions, ActivityIndicator, Platform } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { c, font, space } from '../theme';
 import { Sheet, Button, Notice } from './Chrome';
 import { api, type Language } from '../api';
 
 type Phase = 'intro' | 'camera' | 'analyzing' | 'result' | 'error';
+
+/**
+ * Fixed capture resolution, applied from the very first render.
+ *
+ * Negotiating this at runtime (getAvailablePictureSizesAsync -> setPictureSize)
+ * makes expo-camera tear down and rebind the whole capture session, and a tap
+ * landing in that window fails. Binding once with a known-modest size avoids
+ * the rebind altogether, and keeps the frame small enough that the native
+ * rotate/mirror pass cannot run the app out of memory.
+ *
+ * Android CameraX resolves this through FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+ * so an unsupported value degrades to the nearest supported one rather than
+ * failing. iOS takes a preset enum instead of WxH, so it keeps its default.
+ */
+const CAPTURE_SIZE = Platform.OS === 'android' ? '1280x720' : undefined;
 
 export function FaceDiagnosisSheet({
   open,
@@ -22,46 +37,52 @@ export function FaceDiagnosisSheet({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   const cameraRef = useRef<CameraView>(null);
+  const readyRef = useRef(false);
+  const capturingRef = useRef(false);
+  const settleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [cameraReady, setCameraReady] = useState(false);
-  const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
+  const [capturing, setCapturing] = useState(false);
 
   useEffect(() => {
     if (!open) stopAndReset();
   }, [open]);
 
+  useEffect(() => stopAndReset, []);
+
   function stopAndReset() {
+    readyRef.current = false;
+    capturingRef.current = false;
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = null;
     setPhase('intro');
     setResult(null);
     setErrorMsg(null);
     setCameraReady(false);
-    setPictureSize(undefined);
+    setCapturing(false);
   }
 
-  async function onCameraReady() {
-    setCameraReady(true);
-    try {
-      const sizes = await cameraRef.current?.getAvailablePictureSizesAsync();
-      // Find a small but reasonable resolution (e.g. at least ~480p) to avoid crashing, but large enough for face analysis
-      const suitable = (sizes ?? [])
-        .map((s) => {
-          const [w, h] = s.split('x').map(Number);
-          return { s, area: (w || 9999) * (h || 9999) };
-        })
-        .sort((a, b) => a.area - b.area)
-        .find(s => s.area > 300000) || (sizes && sizes.length ? { s: sizes[0] } : null);
-        
-      if (suitable) {
-        setPictureSize(suitable.s);
-      }
-    } catch {
-      // Fallback to default
-    }
+  function onCameraReady() {
+    if (readyRef.current) return;
+    readyRef.current = true;
+    // The session is bound at its final size already, so this is only a short
+    // grace period for the first frames to flow rather than a resize wait.
+    settleTimer.current = setTimeout(() => {
+      if (!readyRef.current) return; // closed/reset while we were waiting
+      setCameraReady(true);
+    }, 250);
   }
 
   async function start() {
     setErrorMsg(null);
+    // Re-arm onCameraReady: leaving the camera phase unmounts the view, so the
+    // next mount has to run the size negotiation again.
+    readyRef.current = false;
+    if (settleTimer.current) clearTimeout(settleTimer.current);
+    settleTimer.current = null;
+    capturingRef.current = false;
     setCameraReady(false);
+    setCapturing(false);
     let granted = permission?.granted;
     if (!granted) {
       const res = await requestPermission();
@@ -75,31 +96,90 @@ export function FaceDiagnosisSheet({
     setPhase('camera');
   }
 
-  async function capture() {
-    if (!cameraRef.current || !cameraReady) return;
+  /**
+   * One shot at the native camera. It can reject outright, and on a session
+   * that is still rebinding it can also never settle at all, so the wait is
+   * bounded rather than left to hang the "Analyzing..." spinner forever.
+   */
+  async function takeShot(): Promise<string | null> {
+    const cam = cameraRef.current;
+    if (!cam) return null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        const error = new Error('camera capture timed out');
+        error.name = 'CameraCaptureTimeoutError';
+        reject(error);
+      }, 10000);
+    });
     try {
-      setPhase('analyzing');
-      const pic = await cameraRef.current.takePictureAsync({
-        base64: true,
-        quality: 0.3, // Even lower quality for faster, safer decoding
-      });
-      if (pic?.base64) {
-        const response = await api.faceDiagnosis(pic.base64, language);
-        setResult(response);
-        setPhase('result');
-      } else {
-        throw new Error('No image data');
+      const pic = await Promise.race([
+        cam.takePictureAsync({
+          base64: true,
+          quality: 0.6,
+          shutterSound: false,
+          // Native halves the bitmap and retries on OutOfMemoryError, but only
+          // while inSampleSize <= maxDownsampling -- which defaults to 1, so the
+          // retry loop never actually runs. This gives it real headroom.
+          maxDownsampling: 8,
+        }),
+        timeout,
+      ]);
+      return pic?.base64 ?? null;
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
+  async function capture() {
+    if (!cameraRef.current || !cameraReady || capturingRef.current) return;
+    capturingRef.current = true;
+    setCapturing(true);
+    try {
+      let base64: string | null = null;
+      for (let attempt = 0; attempt < 2 && !base64; attempt++) {
+        try {
+          base64 = await takeShot();
+        } catch (err) {
+          // The first shot after the session rebinds can fail transiently;
+          // give the camera a moment and try once more before giving up.
+          // A timed-out call may still be running natively, so never overlap it
+          // with a second capture request.
+          if ((err as Error)?.name === 'CameraCaptureTimeoutError' || attempt === 1) throw err;
+        }
+        if (!base64) await new Promise((r) => setTimeout(r, 400));
       }
+
+      if (!base64) throw new Error('camera returned no image');
+
+      // Keep CameraView mounted until takePictureAsync has returned. Unmounting
+      // it earlier stops the native session and can make the capture resolve
+      // without image data on Android.
+      setPhase('analyzing');
+      const response = await api.faceDiagnosis(base64, language);
+      setResult(response);
+      setPhase('result');
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Could not process that reading. Please try again.');
+      console.error('[FaceDiagnosis] capture failed:', err);
+      // Keep the underlying code/message visible. The native layer distinguishes
+      // ERR_CAMERA_OUT_OF_MEMORY from a plain capture failure, and swallowing
+      // that detail turns every camera problem into the same dead end.
+      const detail = [err?.code, err?.message].filter(Boolean).join(': ');
+      setErrorMsg(
+        'The camera could not take that photo. Hold the phone steady and try again.' +
+          (detail ? `\n\nDetails: ${detail}` : '')
+      );
       setPhase('error');
+    } finally {
+      capturingRef.current = false;
+      setCapturing(false);
     }
   }
 
   return (
     <Sheet open={open} onClose={onClose}>
       <ScrollView style={styles.sheetScroll} contentContainerStyle={styles.sheetContent} showsVerticalScrollIndicator={false}>
-        <Text style={styles.title}>Chinese Face Diagnosis</Text>
+        <Text style={styles.title}>TCM Face Observation</Text>
         <Text style={styles.subtitle}>
           Traditional Chinese Medicine (TCM) face analysis. Not a medical device.
         </Text>
@@ -130,13 +210,17 @@ export function FaceDiagnosisSheet({
                 ref={cameraRef}
                 style={styles.preview}
                 facing="front"
-                animateShutter={true}
-                pictureSize={pictureSize}
+                animateShutter={false}
+                pictureSize={CAPTURE_SIZE}
                 onCameraReady={onCameraReady}
               />
             </View>
             <View style={styles.actions}>
-              <Button label={cameraReady ? "Capture & Analyze" : "Starting camera..."} onPress={capture} disabled={!cameraReady} />
+              <Button
+                label={capturing ? 'Taking photo...' : cameraReady ? 'Capture & Analyze' : 'Starting camera...'}
+                onPress={capture}
+                disabled={!cameraReady || capturing}
+              />
             </View>
           </>
         )}
@@ -151,10 +235,10 @@ export function FaceDiagnosisSheet({
         {phase === 'result' && (
           <>
             <View style={styles.resultBox}>
-              <Text style={styles.resultText}>{result}</Text>
+              <Text style={styles.resultText} selectable>{result}</Text>
             </View>
             <Text style={styles.disclaimerText}>
-              ⚠️ Disclaimer: This analysis is based on Traditional Chinese Medicine principles and should not be used as medical advice or to diagnose any condition.
+              Disclaimer: This educational report describes camera color measurements using traditional face-mapping terminology. It is not medical advice and cannot diagnose any condition.
             </Text>
             <View style={styles.actions}>
               <Button label="Analyze again" onPress={start} tone="quiet" />

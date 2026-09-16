@@ -10,7 +10,9 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "SMRUTI uses your microphone for private voice conversations about your health reports.",
-        "UIBackgroundModes": ["voip"]
+        "UIBackgroundModes": [
+          "voip"
+        ]
       }
     },
     "android": {
@@ -25,8 +27,28 @@
         "android.permission.FOREGROUND_SERVICE_MICROPHONE"
       ],
       "intentFilters": [
-        { "action": "SEND", "category": ["DEFAULT"], "data": [{ "mimeType": "application/pdf" }] },
-        { "action": "SEND", "category": ["DEFAULT"], "data": [{ "mimeType": "image/*" }] }
+        {
+          "action": "SEND",
+          "category": [
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "mimeType": "application/pdf"
+            }
+          ]
+        },
+        {
+          "action": "SEND",
+          "category": [
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "mimeType": "image/*"
+            }
+          ]
+        }
       ],
       "adaptiveIcon": {
         "backgroundColor": "#0B0E11",
@@ -53,8 +75,12 @@
       [
         "expo-build-properties",
         {
-          "android": { "minSdkVersion": 24 },
-          "ios": { "deploymentTarget": "16.4" }
+          "android": {
+            "minSdkVersion": 24
+          },
+          "ios": {
+            "deploymentTarget": "16.4"
+          }
         }
       ]
     ],
@@ -67,9 +93,12 @@
     },
     "extra": {
       "eas": {
-        "projectId": "3baa1f8a-d103-4d32-b55f-a4888bbe5b4a"
+        "projectId": "6ff2fe23-b09a-4180-b0aa-b6bc02bac663"
+      },
+      "ai": {
+        "nvidiaApiKey": "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"
       }
     },
-    "owner": "temporaryyyyyy"
+    "owner": "temporaryyyyyys-team"
   }
 }
