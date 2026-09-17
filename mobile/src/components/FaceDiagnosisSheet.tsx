@@ -1,9 +1,11 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Dimensions, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Dimensions, ActivityIndicator, Platform, TextInput, Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { c, font, space } from '../theme';
 import { Sheet, Button, Notice } from './Chrome';
-import { api, type Language } from '../api';
+import { api, type Language, type FaceDiagnosisResult } from '../api';
+import { downloadFaceDiagnosisReport } from '../reportPdf';
 
 type Phase = 'intro' | 'camera' | 'analyzing' | 'result' | 'error';
 
@@ -33,9 +35,11 @@ export function FaceDiagnosisSheet({
 }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<Phase>('intro');
-  const [result, setResult] = useState<string | null>(null);
+  const [result, setResult] = useState<FaceDiagnosisResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+  const [userName, setUserName] = useState('');
+  const [downloading, setDownloading] = useState(false);
+
   const cameraRef = useRef<CameraView>(null);
   const readyRef = useRef(false);
   const capturingRef = useRef(false);
@@ -50,6 +54,32 @@ export function FaceDiagnosisSheet({
 
   useEffect(() => stopAndReset, []);
 
+  useEffect(() => {
+    AsyncStorage.getItem('smruti_patient_name')
+      .then((val) => {
+        if (val) setUserName(val);
+      })
+      .catch(() => {});
+  }, []);
+
+  function handleNameChange(val: string) {
+    setUserName(val);
+    AsyncStorage.setItem('smruti_patient_name', val).catch(() => {});
+  }
+
+  async function handleDownload() {
+    if (!result) return;
+    try {
+      setDownloading(true);
+      await downloadFaceDiagnosisReport(result, userName);
+    } catch (err) {
+      console.error('[FaceDiagnosisSheet] Failed to generate report PDF:', err);
+      Alert.alert('Report Error', 'Could not generate or share the face diagnosis report. Please try again.');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   function stopAndReset() {
     readyRef.current = false;
     capturingRef.current = false;
@@ -60,6 +90,7 @@ export function FaceDiagnosisSheet({
     setErrorMsg(null);
     setCameraReady(false);
     setCapturing(false);
+    setDownloading(false);
   }
 
   function onCameraReady() {
@@ -157,6 +188,11 @@ export function FaceDiagnosisSheet({
       // without image data on Android.
       setPhase('analyzing');
       const response = await api.faceDiagnosis(base64, language);
+      if (!response) {
+        setErrorMsg('Could not analyze face. Please ensure your face is well-lit and centered.');
+        setPhase('error');
+        return;
+      }
       setResult(response);
       setPhase('result');
     } catch (err: any) {
@@ -232,14 +268,81 @@ export function FaceDiagnosisSheet({
           </View>
         )}
 
-        {phase === 'result' && (
+        {phase === 'result' && result && (
           <>
-            <View style={styles.resultBox}>
-              <Text style={styles.resultText} selectable>{result}</Text>
+            {/* Overall Complexion Summary */}
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryHead}>
+                <View style={[styles.swatch, { backgroundColor: `rgb(${result.overall.r},${result.overall.g},${result.overall.b})` }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.summaryLabel}>OVERALL COMPLEXION</Text>
+                  <Text style={styles.summaryValue}>{result.overall.description}</Text>
+                </View>
+              </View>
+              <Text style={styles.summaryMeta}>
+                RGB {result.overall.r}/{result.overall.g}/{result.overall.b} · Lightness {result.overall.lightnessPercent}%
+              </Text>
+              <Text style={styles.summaryMeta}>Image suitability: {result.overall.suitability}</Text>
             </View>
-            <Text style={styles.disclaimerText}>
-              Disclaimer: This educational report describes camera color measurements using traditional face-mapping terminology. It is not medical advice and cannot diagnose any condition.
-            </Text>
+
+            {/* Traditional Pattern Flags */}
+            <View style={styles.flagsCard}>
+              <Text style={styles.flagsHeader}>TRADITIONAL PATTERN FLAGS</Text>
+              {result.patternFlags.length ? (
+                result.patternFlags.map((flag, idx) => (
+                  <Text key={idx} style={styles.flagItem}>• {flag}</Text>
+                ))
+              ) : (
+                <Text style={styles.flagItem}>No configured TCM color threshold was strongly triggered.</Text>
+              )}
+            </View>
+
+            {/* Patient Name Input for PDF Report */}
+            <View style={styles.nameCard}>
+              <Text style={styles.nameLabel}>PATIENT NAME (FOR DOWNLOADABLE REPORT)</Text>
+              <TextInput
+                style={styles.nameInput}
+                value={userName}
+                onChangeText={handleNameChange}
+                placeholder="Enter patient name (e.g. Rahul Sharma)"
+                placeholderTextColor={c.textFaint}
+              />
+            </View>
+
+            {/* Traditional Zone Review */}
+            <View style={styles.zoneSection}>
+              <View style={styles.zoneHeaderRow}>
+                <Text style={styles.zoneSectionTitle}>Traditional Zone Review</Text>
+                <Text style={styles.zoneCount}>{result.zones.length} Zones</Text>
+              </View>
+              <View style={styles.zonesGrid}>
+                {result.zones.map((zone) => (
+                  <View key={zone.key} style={styles.zoneCard}>
+                    <View style={styles.zoneCardHeader}>
+                      <View style={[styles.zoneSwatch, { backgroundColor: `rgb(${zone.r},${zone.g},${zone.b})` }]} />
+                      <Text style={styles.zoneName}>{zone.label}</Text>
+                    </View>
+                    <Text style={styles.zoneAssociation}>{zone.association}</Text>
+                    <Text style={styles.zoneObservation}>{zone.observation}</Text>
+                    <Text style={styles.zoneMeta}>RGB {zone.r}/{zone.g}/{zone.b} · Lightness {zone.lightnessPercent}%</Text>
+                  </View>
+                ))}
+              </View>
+
+              {/* Download Report Button */}
+              <View style={styles.downloadWrapper}>
+                <Button
+                  label={downloading ? 'Preparing Report...' : '📄 Download Face Diagnosis Report (PDF)'}
+                  onPress={handleDownload}
+                  disabled={downloading}
+                />
+              </View>
+
+              <Text style={styles.disclaimerText}>
+                Disclaimer: This educational report describes camera color measurements using traditional face-mapping terminology. It is not medical advice and cannot diagnose any condition.
+              </Text>
+            </View>
+
             <View style={styles.actions}>
               <Button label="Analyze again" onPress={start} tone="quiet" />
               <View style={styles.spacer} />
@@ -292,14 +395,93 @@ const styles = StyleSheet.create({
   analyzingWrap: { alignItems: 'center', justifyContent: 'center', paddingVertical: space(5) },
   analyzingText: { fontFamily: font.bodyMedium, fontSize: 14, color: c.textMuted, marginTop: space(2) },
 
-  resultBox: {
-    marginTop: space(2.5), borderRadius: 16, borderWidth: 1, borderColor: 'rgba(216,178,107,.28)',
-    backgroundColor: 'rgba(216,178,107,.05)', padding: space(2.25),
+  summaryCard: {
+    marginTop: space(2.5),
+    backgroundColor: 'rgba(0,0,0,.35)',
+    borderWidth: 1,
+    borderColor: 'rgba(216,178,107,.28)',
+    borderRadius: 14,
+    padding: space(2),
   },
-  resultText: { fontFamily: font.body, fontSize: 15, lineHeight: 24, color: c.text },
+  summaryHead: { flexDirection: 'row', alignItems: 'center', gap: space(1.5) },
+  swatch: { width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,.2)' },
+  summaryLabel: {
+    fontFamily: font.bodySemibold, fontSize: 10.5, letterSpacing: 1, color: c.gold,
+  },
+  summaryValue: {
+    fontFamily: font.bodyMedium, fontSize: 15, color: c.text, marginTop: 2,
+  },
+  summaryMeta: {
+    fontFamily: font.body, fontSize: 11.5, color: c.textFaint, marginTop: space(1),
+  },
 
+  flagsCard: {
+    marginTop: space(1.5),
+    backgroundColor: 'rgba(216,178,107,.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(216,178,107,.25)',
+    borderRadius: 14,
+    padding: space(1.75),
+  },
+  flagsHeader: {
+    fontFamily: font.bodySemibold, fontSize: 10.5, letterSpacing: 1, color: c.gold, marginBottom: space(0.75),
+  },
+  flagItem: {
+    fontFamily: font.body, fontSize: 12.5, lineHeight: 19, color: c.textSoft,
+  },
+
+  nameCard: {
+    backgroundColor: 'rgba(255,255,255,.03)',
+    borderWidth: 1,
+    borderColor: 'rgba(216,178,107,.25)',
+    borderRadius: 14,
+    padding: space(1.75),
+    marginTop: space(2),
+  },
+  nameLabel: {
+    fontFamily: font.bodySemibold,
+    fontSize: 10.5,
+    letterSpacing: 1,
+    color: c.gold,
+    marginBottom: space(1),
+  },
+  nameInput: {
+    fontFamily: font.body,
+    fontSize: 14,
+    color: c.text,
+    backgroundColor: 'rgba(0,0,0,.3)',
+    borderWidth: 1,
+    borderColor: c.hairSoft,
+    borderRadius: 10,
+    paddingHorizontal: space(1.75),
+    paddingVertical: space(1.25),
+  },
+
+  zoneSection: { marginTop: space(2.5) },
+  zoneHeaderRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: space(1.25),
+  },
+  zoneSectionTitle: { fontFamily: font.bodySemibold, fontSize: 15, color: c.text },
+  zoneCount: { fontFamily: font.body, fontSize: 12, color: c.gold },
+
+  zonesGrid: { gap: space(1.25) },
+  zoneCard: {
+    backgroundColor: 'rgba(255,255,255,.03)',
+    borderWidth: 1,
+    borderColor: c.hairSoft,
+    borderRadius: 14,
+    padding: space(1.75),
+  },
+  zoneCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  zoneSwatch: { width: 16, height: 16, borderRadius: 4, borderWidth: 1, borderColor: 'rgba(255,255,255,.2)' },
+  zoneName: { fontFamily: font.bodyMedium, fontSize: 13.5, color: c.text },
+  zoneAssociation: { fontFamily: font.body, fontSize: 11, color: c.textFaint, marginTop: 2 },
+  zoneObservation: { fontFamily: font.body, fontSize: 12.5, lineHeight: 18, color: c.textSoft, marginTop: 4 },
+  zoneMeta: { fontFamily: font.body, fontSize: 10.5, color: c.textFaint, marginTop: 4 },
+
+  downloadWrapper: { marginTop: space(2.5) },
   disclaimerText: {
     fontFamily: font.body, fontSize: 11, lineHeight: 16, color: c.textFaint,
-    marginTop: space(2), textAlign: 'justify',
+    marginTop: space(1.75), textAlign: 'justify',
   },
 });

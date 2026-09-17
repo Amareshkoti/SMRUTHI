@@ -86,6 +86,33 @@ const FACE_ZONES = {
 
 type ZoneKey = keyof typeof FACE_ZONES;
 
+export interface FaceZoneObservation {
+  key: string;
+  label: string;
+  association: string;
+  observation: string;
+  r: number;
+  g: number;
+  b: number;
+  lightnessPercent: number;
+}
+
+export interface FaceDiagnosisResult {
+  title: string;
+  language: string;
+  generatedAt: string;
+  overall: {
+    description: string;
+    r: number;
+    g: number;
+    b: number;
+    lightnessPercent: number;
+    suitability: string;
+  };
+  zones: FaceZoneObservation[];
+  patternFlags: string[];
+}
+
 /** Named thresholds used consistently by the report. No result is randomized. */
 const COLOR_THRESHOLDS = Object.freeze({
   redToGreenRatio: 1.3,
@@ -106,12 +133,17 @@ const IMAGE_PROCESSING = Object.freeze({
   rgbaChannelsPerPixel: 4,
 });
 
+const FALLBACK_MESSAGE = 'Could not analyze face. Please ensure your face is well-lit and centered.';
+
 /**
  * Produces a deterministic educational TCM face-observation report on-device.
  * Only regional color and lightness are measured. The traditional associations
  * are not presented as evidence of organ health or as medical diagnoses.
+ *
+ * Returns the structured report, or null if the frame could not be analyzed --
+ * check errorMessage() / use analyzeFaceOnDevice() for the human-readable form.
  */
-export function analyzeFaceOnDevice(base64: string, language: string): string {
+export function analyzeFaceStructured(base64: string, language: string): FaceDiagnosisResult | null {
   try {
     const bytes = base64ToBytes(base64);
     if (bytes.length < 4) throw new Error('Invalid image data');
@@ -125,52 +157,89 @@ export function analyzeFaceOnDevice(base64: string, language: string): string {
     const regions = sampleAllZones(data, width, height);
     const overall = regions.overall;
     const reportZoneKeys = (Object.keys(FACE_ZONES) as ZoneKey[]).filter((key) => key !== 'overall');
-    const zoneLines = reportZoneKeys.map((key, index) => {
+    const zones: FaceZoneObservation[] = reportZoneKeys.map((key) => {
       const definition = FACE_ZONES[key];
       const color = regions[key];
-      return `${index + 1}. ${definition.label}\n` +
-        `   Traditional association: ${definition.association}\n` +
-        `   Camera observation: ${describeColor(color, overall)} ` +
-        `(RGB ${round(color.r)}/${round(color.g)}/${round(color.b)}, lightness ${percent(color.l)}).`;
+      return {
+        key,
+        label: definition.label,
+        association: definition.association,
+        observation: describeColor(color, overall),
+        r: round(color.r),
+        g: round(color.g),
+        b: round(color.b),
+        lightnessPercent: Math.round(color.l * 100),
+      };
     });
 
-    const patternFlags = createPatternFlags(regions);
-    const flags = patternFlags.length
-      ? patternFlags.map((flag) => `• ${flag}`).join('\n')
-      : '• No configured TCM color threshold was strongly triggered.';
     const title = language === 'hi'
       ? 'TCM चेहरा अवलोकन रिपोर्ट'
       : language === 'te'
         ? 'TCM ముఖ పరిశీలన నివేదిక'
         : 'TCM FACE OBSERVATION REPORT';
 
-    return [
+    return {
       title,
-      '',
-      'METHOD',
-      'A centered camera image was sampled across fixed facial zones. Regional RGB color and HSL lightness were compared with the same image’s overall facial sample.',
-      '',
-      'CAPTURE SUMMARY',
-      `Overall complexion: ${describeOverall(overall)}.`,
-      `Overall sample: RGB ${round(overall.r)}/${round(overall.g)}/${round(overall.b)}, lightness ${percent(overall.l)}.`,
-      `Image suitability: ${imageSuitability(overall)}.`,
-      '',
-      'TRADITIONAL ZONE REVIEW',
-      ...zoneLines,
-      '',
-      'TRADITIONAL PATTERN FLAGS',
-      flags,
-      '',
-      'NOT ASSESSED BY THIS CAMERA TEST',
-      'Acne type, puffiness, hydration, skin texture, broken capillaries, wrinkles, eye vitality, hair condition, pulse, tongue, symptoms, and medical history are not measured. A mean-color calculation cannot reliably determine them.',
-      '',
-      'IMPORTANT LIMITATION',
-      'This is an educational interpretation of traditional Chinese face-mapping concepts, not a medical diagnosis. Face mapping is not scientifically established for diagnosing internal-organ disease. Lighting, camera white balance, makeup, facial hair, and natural skin tone can change the result. For persistent skin changes or health concerns, consult a dermatologist or qualified medical professional.',
-    ].join('\n');
+      language,
+      generatedAt: new Date().toISOString(),
+      overall: {
+        description: describeOverall(overall),
+        r: round(overall.r),
+        g: round(overall.g),
+        b: round(overall.b),
+        lightnessPercent: Math.round(overall.l * 100),
+        suitability: imageSuitability(overall),
+      },
+      zones,
+      patternFlags: createPatternFlags(regions),
+    };
   } catch (err) {
     console.error('Face analysis error:', err);
-    return 'Could not analyze face. Please ensure your face is well-lit and centered.';
+    return null;
   }
+}
+
+/** Renders a structured report as the plain-text form used by chat/log contexts. */
+export function formatFaceDiagnosisText(report: FaceDiagnosisResult): string {
+  const zoneLines = report.zones.map((zone, index) =>
+    `${index + 1}. ${zone.label}\n` +
+    `   Traditional association: ${zone.association}\n` +
+    `   Camera observation: ${zone.observation} ` +
+    `(RGB ${zone.r}/${zone.g}/${zone.b}, lightness ${zone.lightnessPercent}%).`
+  );
+  const flags = report.patternFlags.length
+    ? report.patternFlags.map((flag) => `• ${flag}`).join('\n')
+    : '• No configured TCM color threshold was strongly triggered.';
+
+  return [
+    report.title,
+    '',
+    'METHOD',
+    'A centered camera image was sampled across fixed facial zones. Regional RGB color and HSL lightness were compared with the same image’s overall facial sample.',
+    '',
+    'CAPTURE SUMMARY',
+    `Overall complexion: ${report.overall.description}.`,
+    `Overall sample: RGB ${report.overall.r}/${report.overall.g}/${report.overall.b}, lightness ${report.overall.lightnessPercent}%.`,
+    `Image suitability: ${report.overall.suitability}.`,
+    '',
+    'TRADITIONAL ZONE REVIEW',
+    ...zoneLines,
+    '',
+    'TRADITIONAL PATTERN FLAGS',
+    flags,
+    '',
+    'NOT ASSESSED BY THIS CAMERA TEST',
+    'Acne type, puffiness, hydration, skin texture, broken capillaries, wrinkles, eye vitality, hair condition, pulse, tongue, symptoms, and medical history are not measured. A mean-color calculation cannot reliably determine them.',
+    '',
+    'IMPORTANT LIMITATION',
+    'This is an educational interpretation of traditional Chinese face-mapping concepts, not a medical diagnosis. Face mapping is not scientifically established for diagnosing internal-organ disease. Lighting, camera white balance, makeup, facial hair, and natural skin tone can change the result. For persistent skin changes or health concerns, consult a dermatologist or qualified medical professional.',
+  ].join('\n');
+}
+
+/** @deprecated Prefer analyzeFaceStructured() + formatFaceDiagnosisText() for new callers. */
+export function analyzeFaceOnDevice(base64: string, language: string): string {
+  const report = analyzeFaceStructured(base64, language);
+  return report ? formatFaceDiagnosisText(report) : FALLBACK_MESSAGE;
 }
 
 function sampleAllZones(data: Uint8Array, width: number, height: number): Record<ZoneKey, ColorInfo> {

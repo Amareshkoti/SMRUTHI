@@ -2,6 +2,49 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { documentDirectory, cacheDirectory, writeAsStringAsync, copyAsync, EncodingType } from 'expo-file-system/legacy';
 import type { PulseAnalysisResult } from './pulse';
+import type { FaceDiagnosisResult } from './faceDiagnosis';
+
+/**
+ * Writes a printed HTML report to a native PDF and opens the share/download sheet.
+ * Shared by both the pulse checkup and TCM face diagnosis reports.
+ */
+async function shareReportHtml(html: string, filenamePrefix: string, dialogTitle: string): Promise<void> {
+  const { uri, base64 } = await Print.printToFileAsync({ html, base64: true });
+
+  // On Android / Expo Go, Print.printToFileAsync saves into the host app's unscoped cache,
+  // which triggers "Not allowed to read file under given URL" in ExpoSharing.
+  // Writing or copying into the scoped documentDirectory or cacheDirectory makes it accessible.
+  const targetDir = documentDirectory ?? cacheDirectory;
+  let shareUri = uri;
+  if (targetDir) {
+    const filename = `${filenamePrefix}_${Date.now()}.pdf`;
+    const targetUri = `${targetDir}${filename}`;
+    try {
+      if (base64) {
+        await writeAsStringAsync(targetUri, base64, {
+          encoding: EncodingType.Base64,
+        });
+        shareUri = targetUri;
+      } else {
+        await copyAsync({ from: uri, to: targetUri });
+        shareUri = targetUri;
+      }
+    } catch (copyErr) {
+      console.warn('Failed to relocate PDF to scoped directory, attempting share with original uri:', copyErr);
+    }
+  }
+
+  const canShare = await Sharing.isAvailableAsync();
+  if (canShare) {
+    await Sharing.shareAsync(shareUri, {
+      UTI: '.pdf',
+      mimeType: 'application/pdf',
+      dialogTitle,
+    });
+  } else {
+    await Print.printAsync({ html });
+  }
+}
 
 /**
  * Generates and triggers the native download / sharing dialog for a comprehensive
@@ -273,43 +316,191 @@ export async function downloadCheckupReport(result: PulseAnalysisResult, userNam
   `;
 
   try {
-    const { uri, base64 } = await Print.printToFileAsync({ html, base64: true });
-
-    // On Android / Expo Go, Print.printToFileAsync saves into the host app's unscoped cache,
-    // which triggers "Not allowed to read file under given URL" in ExpoSharing.
-    // Writing or copying into the scoped documentDirectory or cacheDirectory makes it accessible.
-    const targetDir = documentDirectory ?? cacheDirectory;
-    let shareUri = uri;
-    if (targetDir) {
-      const filename = `SMRUTI_Checkup_Report_${Date.now()}.pdf`;
-      const targetUri = `${targetDir}${filename}`;
-      try {
-        if (base64) {
-          await writeAsStringAsync(targetUri, base64, {
-            encoding: EncodingType.Base64,
-          });
-          shareUri = targetUri;
-        } else {
-          await copyAsync({ from: uri, to: targetUri });
-          shareUri = targetUri;
-        }
-      } catch (copyErr) {
-        console.warn('Failed to relocate PDF to scoped directory, attempting share with original uri:', copyErr);
-      }
-    }
-
-    const canShare = await Sharing.isAvailableAsync();
-    if (canShare) {
-      await Sharing.shareAsync(shareUri, {
-        UTI: '.pdf',
-        mimeType: 'application/pdf',
-        dialogTitle: 'Download Full Body Health Report',
-      });
-    } else {
-      await Print.printAsync({ html });
-    }
+    await shareReportHtml(html, 'SMRUTI_Checkup_Report', 'Download Full Body Health Report');
   } catch (err) {
     console.error('Failed to generate or share report PDF:', err);
+    throw err;
+  }
+}
+
+/**
+ * Generates and triggers the native download / sharing dialog for a TCM Face
+ * Observation PDF report, laid out the same way as the pulse checkup report.
+ */
+export async function downloadFaceDiagnosisReport(result: FaceDiagnosisResult, userName?: string): Promise<void> {
+  const dateStr = new Date(result.generatedAt).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const patientName = userName?.trim() || 'Self / Anonymous';
+  const zones = result.zones;
+  const flags = result.patternFlags;
+
+  const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SMRUTI TCM Face Observation Report</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      margin: 0;
+      padding: 28px;
+      color: #111827;
+      background: #FFFFFF;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      border-bottom: 2px solid #D8B26B;
+      padding-bottom: 12px;
+      margin-bottom: 18px;
+    }
+    .brand { font-size: 22px; font-weight: 700; letter-spacing: 1px; color: #0B0E11; }
+    .brand span { color: #D8B26B; }
+    .title { font-size: 16px; font-weight: 600; margin-top: 2px; color: #1F2937; }
+    .patient-card {
+      display: flex;
+      justify-content: space-between;
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 18px;
+      font-size: 12px;
+    }
+    .patient-col { display: flex; flex-direction: column; gap: 3px; }
+    .summary-card {
+      border: 1px solid #E5E7EB;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+      background: #0B0E11;
+      color: #F3F4F6;
+    }
+    .summary-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: #9CA3AF;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .summary-value { font-size: 14px; font-weight: 600; color: #F3F4F6; }
+    .swatch-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+    .swatch { width: 26px; height: 26px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.2); }
+    .flags-card {
+      border: 1px solid #FDE68A;
+      background: #FFFBEB;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 20px;
+    }
+    .flags-header { font-size: 11px; font-weight: 700; color: #92400E; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .flag-item { font-size: 12px; color: #78350F; margin-bottom: 3px; }
+    .table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+    .table th, .table td { border: 1px solid #E5E7EB; padding: 7px 10px; text-align: left; vertical-align: top; }
+    .table th { background: #F3F4F6; font-weight: 600; color: #374151; font-size: 11px; text-transform: uppercase; }
+    .zone-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; border: 1px solid #E5E7EB; vertical-align: middle; margin-right: 6px; }
+    .disclaimer {
+      border: 1px dashed #D1D5DB;
+      background: #FFFBEB;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 10.5px;
+      color: #92400E;
+      line-height: 1.4;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div>
+      <div class="brand">SMRUTI <span>VITALITY</span></div>
+      <div class="title">${result.title}</div>
+    </div>
+    <div style="text-align:right; font-size:11px; color:#6B7280;">
+      <div>Method: TCM Face-Mapping Color Analysis</div>
+      <div>Sensor: Smartphone Front Camera</div>
+    </div>
+  </div>
+
+  <div class="patient-card">
+    <div class="patient-col">
+      <div>Patient Name: <strong style="color:#111827; font-size:13px;">${patientName}</strong></div>
+      <div>Test Mode: <strong>Single Frontal Capture</strong></div>
+    </div>
+    <div class="patient-col" style="text-align:right;">
+      <div>Date & Time: <strong>${dateStr}</strong></div>
+      <div>Report ID: <strong>SMRUTI-${Date.now().toString(36).toUpperCase()}</strong></div>
+    </div>
+  </div>
+
+  <div class="summary-card">
+    <div class="summary-header">Overall Complexion Summary</div>
+    <div class="summary-value">${result.overall.description}</div>
+    <div class="swatch-row">
+      <div class="swatch" style="background: rgb(${result.overall.r},${result.overall.g},${result.overall.b});"></div>
+      <div>
+        <div>RGB ${result.overall.r}/${result.overall.g}/${result.overall.b} &middot; Lightness ${result.overall.lightnessPercent}%</div>
+        <div style="color:#9CA3AF; margin-top:2px;">Image suitability: ${result.overall.suitability}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flags-card">
+    <div class="flags-header">Traditional Pattern Flags</div>
+    ${flags.length
+      ? flags.map((flag) => `<div class="flag-item">&bull; ${flag}</div>`).join('')
+      : '<div class="flag-item">No configured TCM color threshold was strongly triggered.</div>'}
+  </div>
+
+  <table class="table">
+    <thead>
+      <tr>
+        <th style="width:24%;">Facial Zone</th>
+        <th style="width:26%;">Traditional Association</th>
+        <th style="width:30%;">Camera Observation</th>
+        <th style="width:20%;">RGB / Lightness</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${zones.map((zone) => `
+        <tr>
+          <td><strong>${zone.label}</strong></td>
+          <td>${zone.association}</td>
+          <td>${zone.observation}</td>
+          <td><span class="zone-swatch" style="background: rgb(${zone.r},${zone.g},${zone.b});"></span>${zone.r}/${zone.g}/${zone.b} &middot; ${zone.lightnessPercent}%</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <div class="disclaimer">
+    <strong>REGULATORY & EDUCATIONAL NOTICE:</strong><br>
+    This report describes camera color measurements using traditional Chinese face-mapping terminology. Only regional RGB color and HSL lightness were measured across fixed facial zones and compared with the same image's overall facial sample.
+    Face mapping is not scientifically established for diagnosing internal-organ disease, and traditional associations are not presented as evidence of organ health.
+    Acne type, puffiness, hydration, skin texture, broken capillaries, wrinkles, eye vitality, hair condition, pulse, tongue, symptoms, and medical history are not measured by this test.
+    Lighting, camera white balance, makeup, facial hair, and natural skin tone can change the result.
+    <strong>This report is for general wellness, screening, and awareness purposes only and does NOT constitute a medical diagnosis.</strong>
+    For persistent skin changes or health concerns, consult a dermatologist or qualified medical professional.
+  </div>
+</body>
+</html>
+  `;
+
+  try {
+    await shareReportHtml(html, 'SMRUTI_Face_Diagnosis_Report', 'Download TCM Face Observation Report');
+  } catch (err) {
+    console.error('Failed to generate or share face diagnosis report PDF:', err);
     throw err;
   }
 }

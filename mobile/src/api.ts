@@ -6,6 +6,7 @@ import { detectLocalTrends } from './trendAnalysis';
 import { answerQuestion } from './ai/answer';
 import { ingestReport } from './ai/ingest';
 import { config } from './ai/config';
+export type { FaceDiagnosisResult, FaceZoneObservation } from './faceDiagnosis';
 
 // The phone orchestrates these operations directly. There is no LAN API.
 export const API_BASE = config.nimBaseUrl;
@@ -22,11 +23,11 @@ export const api = {
     return { insights, answer: await answerQuestion({ question, facts, insights, language, history }) };
   },
   faceDiagnosis: async (base64Image: string, language: Language) => {
-    const { analyzeFaceOnDevice } = await import('./faceDiagnosis');
+    const { analyzeFaceStructured } = await import('./faceDiagnosis');
     // We do this off the main thread or simply await since it takes a moment
-    return new Promise<string>((resolve) => {
+    return new Promise<import('./faceDiagnosis').FaceDiagnosisResult | null>((resolve) => {
       setTimeout(() => {
-        resolve(analyzeFaceOnDevice(base64Image, language));
+        resolve(analyzeFaceStructured(base64Image, language));
       }, 50);
     });
   },
