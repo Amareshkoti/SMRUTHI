@@ -38,3 +38,23 @@ export function normaliseExtraction(e: Extraction): Extraction {
     analyte: canonicaliseAnalyte(f.analyte),
     hospital: f.hospital || e.hospital, doctor: f.doctor || e.doctor })) };
 }
+
+export const PrescribedMedicineSchema = z.object({
+  name: text.min(1),
+  strength: text.default(''),
+  frequency: text.default(''),
+  duration: text.default(''),
+  instructions: text.default(''),
+  /** A brief, general-knowledge description of what this medicine is commonly used for. */
+  commonUse: text.default(''),
+});
+export type PrescribedMedicine = z.infer<typeof PrescribedMedicineSchema>;
+export const PrescriptionExtractionSchema = z.object({
+  isPrescription: z.boolean(),
+  prescriptionEvidence: z.string().trim().max(1000),
+  documentDate: z.union([DateSchema, z.literal('')]).default(''),
+  hospital: text.default(''),
+  doctor: text.default(''),
+  medicines: z.array(PrescribedMedicineSchema).max(50),
+});
+export type PrescriptionExtraction = z.infer<typeof PrescriptionExtractionSchema>;

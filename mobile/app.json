@@ -92,13 +92,13 @@
       "resizeMode": "contain"
     },
     "extra": {
-      "eas": {
-        "projectId": "6ff2fe23-b09a-4180-b0aa-b6bc02bac663"
-      },
       "ai": {
-        "nvidiaApiKey": "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"
+        "nvidiaApiKey": "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"
+      },
+      "eas": {
+        "projectId": "a64e1c2e-517b-4f1c-b66b-c7b7fd80ce15"
       }
     },
-    "owner": "temporaryyyyyys-team"
+    "owner": "amareshtemps-team"
   }
 }

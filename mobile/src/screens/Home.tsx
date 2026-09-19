@@ -4,6 +4,7 @@ import { c, font, space, type } from '../theme';
 import { Screen, LanguagePicker } from '../components/Chrome';
 import { PulseSheet } from '../components/PulseSheet';
 import { FaceDiagnosisSheet } from '../components/FaceDiagnosisSheet';
+import { PrescriptionSheet } from '../components/PrescriptionSheet';
 import { Sparkline } from '../components/Sparkline';
 import { fmt } from '../insightDisplay';
 import { formatWarning, isSafeWarningMessage, type Fact, type Insight, type Language } from '../api';
@@ -36,6 +37,7 @@ export function HomeScreen({
   const [showOtherTrends, setShowOtherTrends] = useState(false);
   const [pulseOpen, setPulseOpen] = useState(false);
   const [faceDiagnosisOpen, setFaceDiagnosisOpen] = useState(false);
+  const [prescriptionOpen, setPrescriptionOpen] = useState(false);
   const top = warning?.insight ?? null;
   const watch = !top ? insights.find((i) => i.severity === 'info') ?? null : null;
   const empty = documents.length === 0;
@@ -204,6 +206,19 @@ export function HomeScreen({
         onClose={() => setFaceDiagnosisOpen(false)}
         onOpenAsk={onOpenAsk}
         language={language}
+      />
+
+      <Pressable onPress={() => setPrescriptionOpen(true)} style={styles.pulseCard} accessibilityRole="button">
+        <View>
+          <Text style={styles.pulseCardTitle}>Read a prescription</Text>
+          <Text style={styles.pulseCardSub}>Photo or PDF · find and chat about the medicines</Text>
+        </View>
+        <Text style={styles.pulseCardArrow}>→</Text>
+      </Pressable>
+      <PrescriptionSheet
+        open={prescriptionOpen}
+        onClose={() => setPrescriptionOpen(false)}
+        onOpenAsk={onOpenAsk}
       />
 
       {others.length > 0 ? (

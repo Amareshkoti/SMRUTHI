@@ -10,5 +10,12 @@ export const config = {
     extract: String(settings.extractModel ?? 'nvidia/nemotron-3-super-120b-a12b'),
     answer: String(settings.answerModel ?? 'nvidia/nemotron-3-super-120b-a12b'),
     answerTelugu: String(settings.teluguModel ?? 'nvidia/nemotron-3-ultra-550b-a55b'),
+    /**
+     * Prescription reading only. Handwriting is ambiguous by nature, so this
+     * step needs a model that can weigh several plausible readings against
+     * which ones are real drug names -- a reasoning model given the actual
+     * image, in one call, rather than a blind OCR-then-structure hand-off.
+     */
+    prescriptionVision: String(settings.prescriptionVisionModel ?? 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning'),
   },
 };

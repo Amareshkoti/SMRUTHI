@@ -194,7 +194,7 @@ export function AskScreen({
       const withMine = [...ephemeralMessages, mine];
       setEphemeralMessages(withMine);
 
-      const res = await api.ask(text, activeEphemeral.facts, language, history, activeEphemeral.extraContext);
+      const res = await api.ask(text, activeEphemeral.facts, language, history, activeEphemeral.extraContext, activeEphemeral.mode);
       const theirs: StoredMessage = { id: `${Date.now()}-assistant`, conversationId: 'ephemeral', role: 'assistant', text: res.answer, language, createdAt: new Date().toISOString() };
       setEphemeralMessages([...withMine, theirs]);
     } catch (err) {
