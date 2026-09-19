@@ -39,6 +39,7 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
         CREATE TABLE IF NOT EXISTS documents (
           id TEXT NOT NULL,
           user_id TEXT NOT NULL,
+          person_id TEXT,
           title TEXT NOT NULL,
           source_name TEXT NOT NULL,
           doc_date TEXT NOT NULL,
@@ -74,6 +75,8 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
         CREATE INDEX IF NOT EXISTS facts_user_analyte_date ON facts (user_id, analyte, date);
         CREATE INDEX IF NOT EXISTS messages_user_created ON messages (user_id, created_at);
       `);
+      const documentColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(documents)');
+      if (!documentColumns.some(c => c.name === 'person_id')) await db.execAsync('ALTER TABLE documents ADD COLUMN person_id TEXT');
       const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(facts)');
       if (!columns.some(c => c.name === 'ref_low_inclusive')) await db.execAsync('ALTER TABLE facts ADD COLUMN ref_low_inclusive INTEGER NOT NULL DEFAULT 1');
       if (!columns.some(c => c.name === 'ref_high_inclusive')) await db.execAsync('ALTER TABLE facts ADD COLUMN ref_high_inclusive INTEGER NOT NULL DEFAULT 1');
@@ -87,6 +90,7 @@ async function open(): Promise<SQLite.SQLiteDatabase> {
 
 export interface StoredDocument {
   id: string;
+  person_id: string | null;
   title: string;
   source_name: string;
   doc_date: string;
@@ -120,9 +124,9 @@ export async function cacheReports(
     for (const d of documents) {
       await db.runAsync(
         `INSERT OR REPLACE INTO documents
-           (id, user_id, title, source_name, doc_date, hospital, doctor, fact_count, added_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        d.id, userId, d.title, d.source_name, d.doc_date, d.hospital, d.doctor, d.fact_count, d.added_at,
+           (id, user_id, person_id, title, source_name, doc_date, hospital, doctor, fact_count, added_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        d.id, userId, d.person_id, d.title, d.source_name, d.doc_date, d.hospital, d.doctor, d.fact_count, d.added_at,
       );
     }
     for (const f of facts) {
@@ -160,7 +164,7 @@ export async function listDocuments(userId: string): Promise<StoredDocument[]> {
   return cacheJob(async () => {
   const db = await open();
   return db.getAllAsync<StoredDocument>(
-    `SELECT id, title, source_name, doc_date, hospital, doctor, fact_count, added_at
+    `SELECT id, person_id, title, source_name, doc_date, hospital, doctor, fact_count, added_at
        FROM documents WHERE user_id = ? ORDER BY doc_date DESC`,
     userId,
   );
@@ -246,34 +250,6 @@ export async function clearCache(userId: string): Promise<void> {
     await db.execAsync('ROLLBACK');
     throw err;
   }
-  });
-}
-/** Inserts a local checkup document and its extracted vitals into SQLite cache */
-export async function saveCheckupDocument(
-  userId: string,
-  doc: StoredDocument,
-  facts: Fact[],
-): Promise<void> {
-  if (!localCacheIsAvailable()) return;
-  return cacheJob(async () => {
-    const db = await open();
-    await db.withTransactionAsync(async () => {
-      await db.runAsync(
-        `INSERT OR REPLACE INTO documents
-           (id, user_id, title, source_name, doc_date, hospital, doctor, fact_count, added_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        doc.id, userId, doc.title, doc.source_name, doc.doc_date, doc.hospital, doc.doctor, doc.fact_count, doc.added_at,
-      );
-      for (const f of facts) {
-        await db.runAsync(
-          `INSERT INTO facts
-             (user_id, doc_id, date, analyte, analyte_printed, value, unit, ref_low, ref_high, ref_low_inclusive, ref_high_inclusive, doctor, hospital)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          userId, f.docId ?? doc.id, f.date, f.analyte, f.analyteAsPrinted, f.value, f.unit,
-          f.refLow, f.refHigh, f.refLowInclusive === false ? 0 : 1, f.refHighInclusive === false ? 0 : 1, f.doctor, f.hospital,
-        );
-      }
-    });
   });
 }
 

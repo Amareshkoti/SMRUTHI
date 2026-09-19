@@ -18,9 +18,9 @@ export const api = {
     const insight = detectLocalTrends(facts).find(i => i.severity === 'warning') ?? null;
     return { insight, message: insight ? formatWarning(insight, language) : null };
   },
-  ask: async (question: string, facts: Fact[], language: Language, history: ChatTurn[] = []) => {
+  ask: async (question: string, facts: Fact[], language: Language, history: ChatTurn[] = [], extraContext?: string) => {
     const insights = detectLocalTrends(facts);
-    return { insights, answer: await answerQuestion({ question, facts, insights, language, history }) };
+    return { insights, answer: await answerQuestion({ question, facts, insights, language, history, extraContext }) };
   },
   faceDiagnosis: async (base64Image: string, language: Language) => {
     const { analyzeFaceStructured } = await import('./faceDiagnosis');

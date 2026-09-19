@@ -4,8 +4,10 @@ import { c, font, space } from '../theme';
 import { LanguagePicker, Notice } from '../components/Chrome';
 import { VoiceCallButton } from '../components/VoiceCallButton';
 import { api, type ChatTurn, type Fact, type Language } from '../api';
-import type { StoredMessage } from '../db';
+import type { StoredDocument, StoredMessage } from '../db';
 import { loadLocalChats, saveLocalChats, type LocalChat } from '../chatStorage';
+import type { FamilyProfile } from '../family';
+import type { EphemeralChatContext } from '../ephemeralChat';
 
 const SUGGESTIONS: Record<Language, string[]> = {
   en: [
@@ -27,25 +29,65 @@ const SUGGESTIONS: Record<Language, string[]> = {
 
 export function AskScreen({
   facts,
+  documents,
+  family,
   language,
   onLanguage,
   userId,
   onChanged,
+  ephemeral,
+  onEphemeralConsumed,
 }: {
   facts: Fact[];
+  documents: StoredDocument[];
+  family: FamilyProfile[];
   language: Language;
   onLanguage: (l: Language) => void;
   userId: string;
   /** Refreshes report counts elsewhere in the app. Chats stay on this device. */
   onChanged?: () => void;
+  /** An on-device screening (pulse/face) to chat about once, right now. */
+  ephemeral?: EphemeralChatContext | null;
+  /** Called once the screening above has been picked up, so it isn't offered again. */
+  onEphemeralConsumed?: () => void;
 }) {
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [chats, setChats] = useState<LocalChat[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [selectedPersonId, setSelectedPersonId] = useState<string | null>(null);
   const [question, setQuestion] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const scroller = useRef<ScrollView>(null);
+
+  // A screening someone asked to chat about. Kept only in this component's
+  // state -- never written to chatStorage or the SQLite cache -- and thrown
+  // away the moment it's dismissed or this screen unmounts.
+  const [activeEphemeral, setActiveEphemeral] = useState<EphemeralChatContext | null>(null);
+  const [ephemeralMessages, setEphemeralMessages] = useState<StoredMessage[]>([]);
+
+  useEffect(() => {
+    if (!ephemeral) return;
+    setActiveEphemeral(ephemeral);
+    setEphemeralMessages([]);
+    setError(null);
+    onEphemeralConsumed?.();
+    // Only react to a new screening arriving, not to the callback identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ephemeral]);
+
+  function endEphemeral() {
+    setActiveEphemeral(null);
+    setEphemeralMessages([]);
+    setError(null);
+  }
+
+  // Which document each fact came from belongs to, so a person's chat only
+  // ever sees their own readings.
+  const docOwner = new Map(documents.map(d => [d.id, d.person_id]));
+  const scopedFacts = facts.filter(f => (docOwner.get(f.docId ?? '') ?? null) === selectedPersonId);
+  const personName = selectedPersonId ? family.find(m => m.id === selectedPersonId)?.displayName ?? 'them' : 'you';
+  const visibleChats = chats.filter(chat => (chat.personId ?? null) === selectedPersonId);
 
   // Chats are private to this device and are never sent to Supabase.
   useEffect(() => {
@@ -59,7 +101,7 @@ export function AskScreen({
           setActiveChatId((current) => current && local.some(c => c.id === current) ? current : local[0]!.id);
         } else {
           const now = new Date().toISOString();
-          const first: LocalChat = { id: `${Date.now()}`, title: 'New chat', createdAt: now, updatedAt: now, messages: [] };
+          const first: LocalChat = { id: `${Date.now()}`, title: 'New chat', personId: null, createdAt: now, updatedAt: now, messages: [] };
           await saveLocalChats(userId, [first]);
           if (!cancelled) { setChats([first]); setActiveChatId(first.id); }
         }
@@ -76,6 +118,30 @@ export function AskScreen({
     setMessages(chats.find(c => c.id === activeChatId)?.messages ?? []);
   }, [activeChatId, chats]);
 
+  // Keep the active chat pointed at one that belongs to whoever is selected;
+  // start a fresh chat for them if they don't have one yet.
+  useEffect(() => {
+    if (visibleChats.some(c => c.id === activeChatId)) return;
+    if (visibleChats.length) {
+      setActiveChatId(visibleChats[0]!.id);
+      return;
+    }
+    // No chat for this person yet, and no room to start one without deleting
+    // another -- clear the selection rather than silently reusing a chat that
+    // belongs to someone else.
+    if (chats.length >= 3) { setActiveChatId(null); return; }
+    (async () => {
+      try {
+        const now = new Date().toISOString();
+        const chat: LocalChat = { id: `${Date.now()}`, title: 'New chat', personId: selectedPersonId, createdAt: now, updatedAt: now, messages: [] };
+        const next = [chat, ...chats];
+        await saveLocalChats(userId, next);
+        setChats(next);
+        setActiveChatId(chat.id);
+      } catch { /* the chip stays selected; the user can retry by tapping it again */ }
+    })();
+  }, [selectedPersonId, chats, visibleChats, activeChatId, userId]);
+
   async function newChat() {
     if (chats.length >= 3) {
       setError('You can keep up to 3 chats. Delete one before starting another.');
@@ -83,7 +149,7 @@ export function AskScreen({
     }
     try {
       const now = new Date().toISOString();
-      const chat: LocalChat = { id: `${Date.now()}`, title: 'New chat', createdAt: now, updatedAt: now, messages: [] };
+      const chat: LocalChat = { id: `${Date.now()}`, title: 'New chat', personId: selectedPersonId, createdAt: now, updatedAt: now, messages: [] };
       const next = [chat, ...chats];
       await saveLocalChats(userId, next);
       setChats(next);
@@ -97,21 +163,52 @@ export function AskScreen({
     if (!activeChatId) return;
     try {
       const remaining = chats.filter(c => c.id !== activeChatId);
+      const remainingForPerson = remaining.filter(c => (c.personId ?? null) === selectedPersonId);
       // Never leave activeChatId null -- ask() no-ops without one, and that
       // silence looked like the app had stopped working until it was reopened.
       const now = new Date().toISOString();
-      const next = remaining.length ? remaining : [{ id: `${Date.now()}`, title: 'New chat', createdAt: now, updatedAt: now, messages: [] }];
+      const fallback: LocalChat = { id: `${Date.now()}`, title: 'New chat', personId: selectedPersonId, createdAt: now, updatedAt: now, messages: [] };
+      const next = remainingForPerson.length ? remaining : [...remaining, fallback];
+      const active = remainingForPerson[0] ?? fallback;
       await saveLocalChats(userId, next);
       setChats(next);
-      setActiveChatId(next[0]!.id);
-      setMessages(next[0]!.messages);
+      setActiveChatId(active.id);
+      setMessages(active.messages);
       setError(null);
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not delete this chat.'); }
   }
 
+  // Nothing here ever reaches saveLocalChats or the SQLite cache -- this
+  // conversation exists only in this component's state.
+  async function askEphemeral(text: string) {
+    if (!activeEphemeral) return;
+    setBusy(true);
+    setError(null);
+    setQuestion('');
+
+    const history: ChatTurn[] = ephemeralMessages.map((m) => ({ role: m.role, text: m.text }));
+
+    try {
+      const now = new Date().toISOString();
+      const mine: StoredMessage = { id: `${Date.now()}-user`, conversationId: 'ephemeral', role: 'user', text, language, createdAt: now };
+      const withMine = [...ephemeralMessages, mine];
+      setEphemeralMessages(withMine);
+
+      const res = await api.ask(text, activeEphemeral.facts, language, history, activeEphemeral.extraContext);
+      const theirs: StoredMessage = { id: `${Date.now()}-assistant`, conversationId: 'ephemeral', role: 'assistant', text: res.answer, language, createdAt: new Date().toISOString() };
+      setEphemeralMessages([...withMine, theirs]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not answer that.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function ask(q: string) {
     const text = q.trim();
-    if (!text || busy || !activeChatId) return;
+    if (!text || busy) return;
+    if (activeEphemeral) return askEphemeral(text);
+    if (!activeChatId) return;
     setBusy(true);
     setError(null);
     setQuestion('');
@@ -129,7 +226,7 @@ export function AskScreen({
       setMessages(withMine);
       onChanged?.();
 
-      const res = await api.ask(text, facts, language, history);
+      const res = await api.ask(text, scopedFacts, language, history);
       const theirs: StoredMessage = { id: `${Date.now()}-assistant`, conversationId: activeChatId, role: 'assistant', text: res.answer, language, createdAt: new Date().toISOString() };
       const withAnswer = [...withMine, theirs];
       setMessages(withAnswer);
@@ -144,12 +241,13 @@ export function AskScreen({
     }
   }
 
-  const empty = messages.length === 0;
-  const lastAnswerId = [...messages].reverse().find((m) => m.role === 'assistant')?.id;
+  const displayMessages = activeEphemeral ? ephemeralMessages : messages;
+  const empty = displayMessages.length === 0;
+  const lastAnswerId = [...displayMessages].reverse().find((m) => m.role === 'assistant')?.id;
 
   return (
     <View style={styles.root}>
-      <View style={styles.voiceDock}><VoiceCallButton facts={facts} language={language} /></View>
+      <View style={styles.voiceDock}><VoiceCallButton facts={activeEphemeral ? activeEphemeral.facts : scopedFacts} language={language} /></View>
       <ScrollView
         ref={scroller}
         style={styles.scroll}
@@ -167,17 +265,56 @@ export function AskScreen({
           <LanguagePicker value={language} onChange={onLanguage} />
         </View>
 
-        <View style={styles.chatTabs}>
-          {chats.map((chat) => (
-            <Pressable key={chat.id} onPress={() => setActiveChatId(chat.id)} style={[styles.chatTab, chat.id === activeChatId && styles.chatTabOn]}>
-              <Text numberOfLines={1} style={[styles.chatTabText, chat.id === activeChatId && styles.chatTabTextOn]}>{chat.title}</Text>
+        {activeEphemeral ? (
+          <View style={styles.ephemeralBanner}>
+            <View style={styles.ephemeralBannerHead}>
+              <View style={styles.ephemeralDot} />
+              <Text style={styles.ephemeralTitle}>CHATTING ABOUT · {activeEphemeral.label.toUpperCase()}</Text>
+            </View>
+            <Text style={styles.ephemeralDesc}>
+              Not saved -- this conversation and the screening it's about will be gone once you leave this screen.
+            </Text>
+            <Pressable onPress={endEphemeral} style={styles.ephemeralDone}>
+              <Text style={styles.ephemeralDoneText}>Done with this chat</Text>
             </Pressable>
-          ))}
-          {activeChatId ? <Pressable onPress={removeChat} style={styles.deleteChat}><Text style={styles.deleteChatText}>Delete chat</Text></Pressable> : null}
-          {chats.length < 3 ? <Pressable onPress={newChat} style={styles.newChat}><Text style={styles.newChatText}>+ Chat</Text></Pressable> : null}
-        </View>
+          </View>
+        ) : (
+          <>
+            {family.length ? (
+              <View style={styles.personSlot}>
+                <Text style={styles.personLabel}>CHATTING ABOUT</Text>
+                <View style={styles.personChoices}>
+                  <Pressable onPress={() => setSelectedPersonId(null)} style={[styles.person, !selectedPersonId && styles.personOn]}>
+                    <Text style={[styles.personText, !selectedPersonId && styles.personTextOn]}>Me</Text>
+                  </Pressable>
+                  {family.map(member => (
+                    <Pressable key={member.id} onPress={() => setSelectedPersonId(member.id)} style={[styles.person, selectedPersonId === member.id && styles.personOn]}>
+                      <Text style={[styles.personText, selectedPersonId === member.id && styles.personTextOn]}>{member.displayName}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </View>
+            ) : null}
 
-        {messages.map((m) =>
+            {visibleChats.length || chats.length < 3 ? (
+              <View style={styles.chatTabs}>
+                {visibleChats.map((chat) => (
+                  <Pressable key={chat.id} onPress={() => setActiveChatId(chat.id)} style={[styles.chatTab, chat.id === activeChatId && styles.chatTabOn]}>
+                    <Text numberOfLines={1} style={[styles.chatTabText, chat.id === activeChatId && styles.chatTabTextOn]}>{chat.title}</Text>
+                  </Pressable>
+                ))}
+                {activeChatId ? <Pressable onPress={removeChat} style={styles.deleteChat}><Text style={styles.deleteChatText}>Delete chat</Text></Pressable> : null}
+                {chats.length < 3 ? <Pressable onPress={newChat} style={styles.newChat}><Text style={styles.newChatText}>+ Chat</Text></Pressable> : null}
+              </View>
+            ) : (
+              <View style={styles.slot}>
+                <Notice text={`You can keep up to 3 chats. Delete one (for any person) to start chatting with ${personName === 'you' ? 'your own records' : personName}.`} tone="error" />
+              </View>
+            )}
+          </>
+        )}
+
+        {displayMessages.map((m) =>
           m.role === 'user' ? (
             <View key={m.id} style={styles.askedRow}>
               <View style={styles.askedBubble}>
@@ -189,7 +326,9 @@ export function AskScreen({
               <Text style={styles.answerText}>{m.text}</Text>
               {m.id === lastAnswerId && (
                 <Text style={styles.answerFoot}>
-                  Draws on your {facts.length} remembered results, and general medical knowledge when needed.
+                  {activeEphemeral
+                    ? `Draws on this session's ${activeEphemeral.label.toLowerCase()}, and general medical knowledge when needed.`
+                    : `Draws on ${scopedFacts.length} remembered results for ${personName}, and general medical knowledge when needed.`}
                 </Text>
               )}
             </View>
@@ -209,7 +348,7 @@ export function AskScreen({
           </View>
         ) : null}
 
-        {empty ? (
+        {empty && !activeEphemeral ? (
           <>
             <Text style={styles.tryLabel}>TRY</Text>
             <View style={styles.suggestions}>
@@ -228,7 +367,7 @@ export function AskScreen({
         <TextInput
           value={question}
           onChangeText={setQuestion}
-          placeholder="Ask about your reports"
+          placeholder={activeEphemeral ? `Ask about this ${activeEphemeral.label.toLowerCase()}` : 'Ask about your reports'}
           placeholderTextColor={c.textFaint}
           style={styles.input}
           editable={!busy}
@@ -257,6 +396,26 @@ const styles = StyleSheet.create({
   title: { fontFamily: font.display, fontSize: 38, lineHeight: 44, color: c.text, marginTop: space(1.25) },
 
   langSlot: { marginHorizontal: space(3), marginTop: space(2.5) },
+
+  ephemeralBanner: {
+    marginHorizontal: space(3), marginTop: space(2), borderRadius: 16, borderWidth: 1,
+    borderColor: 'rgba(127,195,165,.3)', backgroundColor: 'rgba(127,195,165,.08)', padding: space(2),
+  },
+  ephemeralBannerHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  ephemeralDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: c.mint },
+  ephemeralTitle: { fontFamily: font.bodySemibold, fontSize: 11, letterSpacing: 0.8, color: c.mint },
+  ephemeralDesc: { fontFamily: font.body, fontSize: 12, lineHeight: 18, color: c.textSoft, marginTop: 4 },
+  ephemeralDone: { marginTop: space(1.25), alignSelf: 'flex-start' },
+  ephemeralDoneText: { fontFamily: font.bodyMedium, fontSize: 12, color: c.gold },
+
+  personSlot: { marginHorizontal: space(3), marginTop: space(2) },
+  personLabel: { fontFamily: font.bodySemibold, fontSize: 10, letterSpacing: 1.4, color: c.textFaint, marginBottom: space(1) },
+  personChoices: { flexDirection: 'row', gap: space(1), flexWrap: 'wrap' },
+  person: { borderRadius: 12, borderWidth: 1, borderColor: c.hairSoft, paddingHorizontal: space(1.5), paddingVertical: space(0.9) },
+  personOn: { borderColor: c.gold, backgroundColor: c.goldWash },
+  personText: { fontFamily: font.bodyMedium, fontSize: 12, color: c.textMuted },
+  personTextOn: { color: c.gold },
+
   chatTabs: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: space(3), gap: space(1), marginTop: space(2) },
   chatTab: { flex: 1, minWidth: 0, borderRadius: 14, borderWidth: 1, borderColor: c.hairSoft, paddingVertical: space(1), paddingHorizontal: space(1.5) },
   chatTabOn: { borderColor: c.gold, backgroundColor: c.goldWash },

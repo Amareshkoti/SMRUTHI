@@ -14,9 +14,9 @@ import {
   type PulseAnalysisResult,
   type CheckupTestItem,
 } from '../pulse';
-import { saveCheckupDocument, type StoredDocument } from '../db';
 import { downloadCheckupReport } from '../reportPdf';
 import { loadBpCalibration, saveBpCalibration, calibrationAgeDays, type BpCalibration } from '../bpCalibration';
+import type { EphemeralChatContext } from '../ephemeralChat';
 
 const DURATION_MS = 20_000;
 const MIN_CAPTURE_GAP_MS = 60; // 60ms gap yields ~10-15 FPS which is ideal for PPG
@@ -40,22 +40,17 @@ type Phase = 'intro' | 'measuring' | 'result' | 'error';
 export function PulseSheet({
   open,
   onClose,
-  userId,
-  onSavedRecord,
   onOpenAsk,
 }: {
   open: boolean;
   onClose: () => void;
-  userId?: string | null;
-  onSavedRecord?: () => void;
-  onOpenAsk?: () => void;
+  onOpenAsk?: (ephemeral: EphemeralChatContext) => void;
 }) {
   const [permission, requestPermission] = useCameraPermissions();
   const [phase, setPhase] = useState<Phase>('intro');
   const [bpm, setBpm] = useState<number | null>(null);
   const [analysis, setAnalysis] = useState<PulseAnalysisResult | null>(null);
   const [userName, setUserName] = useState('');
-  const [savedToMemory, setSavedToMemory] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [downloading, setDownloading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -115,7 +110,6 @@ export function PulseSheet({
         if (recomputed.bpm) {
           setAnalysis(recomputed);
           setBpm(recomputed.bpm);
-          if (userId) void persistToMemory(recomputed, userId);
         }
       }
     } finally {
@@ -133,7 +127,6 @@ export function PulseSheet({
     setPhase('intro');
     setBpm(null);
     setAnalysis(null);
-    setSavedToMemory(false);
     setDownloading(false);
     setErrorMsg(null);
     setElapsedMs(0);
@@ -142,28 +135,12 @@ export function PulseSheet({
     samplesRef.current = [];
   }
 
-  async function persistToMemory(res: PulseAnalysisResult, uid?: string | null) {
-    if (!uid) return;
-    try {
-      const docId = `chk-${Date.now()}`;
-      const docDate = new Date().toISOString().slice(0, 10);
-      const facts = buildCheckupFacts(res, docId, docDate);
-      const doc: StoredDocument = {
-        id: docId,
-        title: 'Full Body Health Checkup (Camera PPG)',
-        source_name: 'SMRUTI Optical Sensor',
-        doc_date: docDate,
-        hospital: 'SMRUTI Health Sensor',
-        doctor: 'Automated Biomarker Screening',
-        fact_count: facts.length,
-        added_at: new Date().toISOString(),
-      };
-      await saveCheckupDocument(uid, doc, facts);
-      setSavedToMemory(true);
-      onSavedRecord?.();
-    } catch (err) {
-      console.warn('[PulseSheet] Error saving checkup to memory:', err);
-    }
+  function chatAboutResults() {
+    if (!analysis || !onOpenAsk) return;
+    const docDate = new Date().toISOString().slice(0, 10);
+    const facts = buildCheckupFacts(analysis, 'ephemeral-pulse-checkup', docDate);
+    onClose();
+    onOpenAsk({ label: 'Full Body Vital Checkup (Camera PPG)', facts });
   }
 
   async function handleDownload() {
@@ -295,9 +272,6 @@ export function PulseSheet({
         setBpm(result.bpm);
         setAnalysis(result);
         setPhase('result');
-        if (userId) {
-          void persistToMemory(result, userId);
-        }
       } else {
         setErrorMsg(result.reason ?? 'Could not get a reading. Please try again.');
         setPhase('error');
@@ -521,27 +495,19 @@ export function PulseSheet({
               )}
             </View>
 
-            {/* Health Memory & Ask Chat Sync Banner */}
+            {/* Not saved -- chat about it now, or it's gone */}
             <View style={styles.memoryBox}>
               <View style={styles.memoryHead}>
                 <View style={styles.memoryDot} />
-                <Text style={styles.memoryTitle}>
-                  {savedToMemory ? 'SAVED TO DEVICE HEALTH MEMORY' : 'STORING IN HEALTH MEMORY...'}
-                </Text>
+                <Text style={styles.memoryTitle}>NOT SAVED · THIS SCREEN ONLY</Text>
               </View>
               <Text style={styles.memoryDesc}>
-                All vital signs from this checkup are stored in your device's memory. You can ask any question or chat about these results in the Ask tab.
+                These vital signs are never written to your health memory or your account. Ask about
+                them now in a private, one-off chat -- once you leave, they're gone for good.
               </Text>
               {onOpenAsk ? (
                 <View style={{ marginTop: space(1.25) }}>
-                  <Button
-                    label="💬 Chat About Results in Ask"
-                    onPress={() => {
-                      onClose();
-                      onOpenAsk();
-                    }}
-                    tone="gold"
-                  />
+                  <Button label="💬 Chat About Results (not saved)" onPress={chatAboutResults} tone="gold" />
                 </View>
               ) : null}
             </View>

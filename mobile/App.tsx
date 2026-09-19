@@ -24,6 +24,7 @@ import { detectLocalTrends } from './src/trendAnalysis';
 import { useUploadJob } from './src/uploadJob';
 import { reportTools } from './modules/report-tools';
 import { fetchFamily, type FamilyProfile } from './src/family';
+import type { EphemeralChatContext } from './src/ephemeralChat';
 
 type SharedReport = { uri: string; name: string; mimeType: string; size: number };
 
@@ -57,6 +58,11 @@ function AppInner() {
   const [warning, setWarning] = useState<{ insight: Insight; message: string | null } | null>(null);
   const [phrasing, setPhrasing] = useState(false);
   const uploadJob = useUploadJob();
+
+  // A pending on-device screening (pulse/face) to chat about. Lives only in
+  // memory -- never written to chatStorage or the SQLite cache -- and is
+  // cleared the moment the Ask screen has picked it up.
+  const [ephemeral, setEphemeral] = useState<EphemeralChatContext | null>(null);
 
   useEffect(() => {
     if (Platform.OS !== 'android') return;
@@ -207,6 +213,7 @@ function AppInner() {
     setInsights([]);
     setWarning(null);
     setNote(null);
+    setEphemeral(null);
     setView('home');
     await supabase.auth.signOut();
   }
@@ -262,9 +269,7 @@ function AppInner() {
               onLanguage={setLanguage}
               onOpenSignal={openSignal}
               onOpenVault={() => setView('vault')}
-              userId={userId}
-              onSavedRecord={() => void refresh()}
-              onOpenAsk={() => setView('ask')}
+              onOpenAsk={(ctx) => { if (ctx) setEphemeral(ctx); setView('ask'); }}
             />
           )}
           {view === 'signal' && focusedInsight && (
@@ -274,10 +279,14 @@ function AppInner() {
           {view === 'ask' && (
             <AskScreen
               facts={facts}
+              documents={documents}
+              family={family}
               language={language}
               onLanguage={setLanguage}
               userId={userId}
               onChanged={() => void refresh()}
+              ephemeral={ephemeral}
+              onEphemeralConsumed={() => setEphemeral(null)}
             />
           )}
           {view === 'vault' && (

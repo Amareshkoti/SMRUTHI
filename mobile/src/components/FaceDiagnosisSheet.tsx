@@ -6,6 +6,7 @@ import { c, font, space } from '../theme';
 import { Sheet, Button, Notice } from './Chrome';
 import { api, type Language, type FaceDiagnosisResult } from '../api';
 import { downloadFaceDiagnosisReport } from '../reportPdf';
+import { describeFaceDiagnosis, type EphemeralChatContext } from '../ephemeralChat';
 
 type Phase = 'intro' | 'camera' | 'analyzing' | 'result' | 'error';
 
@@ -27,10 +28,12 @@ const CAPTURE_SIZE = Platform.OS === 'android' ? '1280x720' : undefined;
 export function FaceDiagnosisSheet({
   open,
   onClose,
+  onOpenAsk,
   language = 'en',
 }: {
   open: boolean;
   onClose: () => void;
+  onOpenAsk?: (ephemeral: EphemeralChatContext) => void;
   language?: Language;
 }) {
   const [permission, requestPermission] = useCameraPermissions();
@@ -78,6 +81,12 @@ export function FaceDiagnosisSheet({
     } finally {
       setDownloading(false);
     }
+  }
+
+  function chatAboutResults() {
+    if (!result || !onOpenAsk) return;
+    onClose();
+    onOpenAsk({ label: 'TCM Face Observation', facts: [], extraContext: describeFaceDiagnosis(result) });
   }
 
   function stopAndReset() {
@@ -297,6 +306,23 @@ export function FaceDiagnosisSheet({
               )}
             </View>
 
+            {/* Not saved -- chat about it now, or it's gone */}
+            <View style={styles.memoryBox}>
+              <View style={styles.memoryHead}>
+                <View style={styles.memoryDot} />
+                <Text style={styles.memoryTitle}>NOT SAVED · THIS SCREEN ONLY</Text>
+              </View>
+              <Text style={styles.memoryDesc}>
+                This reading is never written to your health memory or your account. Ask about it now
+                in a private, one-off chat -- once you leave, it's gone for good.
+              </Text>
+              {onOpenAsk ? (
+                <View style={{ marginTop: space(1.25) }}>
+                  <Button label="💬 Chat About Results (not saved)" onPress={chatAboutResults} tone="gold" />
+                </View>
+              ) : null}
+            </View>
+
             {/* Patient Name Input for PDF Report */}
             <View style={styles.nameCard}>
               <Text style={styles.nameLabel}>PATIENT NAME (FOR DOWNLOADABLE REPORT)</Text>
@@ -429,6 +455,19 @@ const styles = StyleSheet.create({
   flagItem: {
     fontFamily: font.body, fontSize: 12.5, lineHeight: 19, color: c.textSoft,
   },
+
+  memoryBox: {
+    backgroundColor: 'rgba(127,195,165,.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(127,195,165,.25)',
+    borderRadius: 14,
+    padding: space(2),
+    marginTop: space(2.5),
+  },
+  memoryHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  memoryDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: c.mint },
+  memoryTitle: { fontFamily: font.bodySemibold, fontSize: 11, letterSpacing: 0.8, color: c.mint },
+  memoryDesc: { fontFamily: font.body, fontSize: 12, lineHeight: 18, color: c.textSoft, marginTop: 4 },
 
   nameCard: {
     backgroundColor: 'rgba(255,255,255,.03)',

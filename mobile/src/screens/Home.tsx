@@ -8,6 +8,7 @@ import { Sparkline } from '../components/Sparkline';
 import { fmt } from '../insightDisplay';
 import { formatWarning, isSafeWarningMessage, type Fact, type Insight, type Language } from '../api';
 import type { StoredDocument } from '../db';
+import type { EphemeralChatContext } from '../ephemeralChat';
 
 export function HomeScreen({
   documents,
@@ -19,8 +20,6 @@ export function HomeScreen({
   onLanguage,
   onOpenSignal,
   onOpenVault,
-  userId,
-  onSavedRecord,
   onOpenAsk,
 }: {
   documents: StoredDocument[];
@@ -32,9 +31,7 @@ export function HomeScreen({
   onLanguage: (l: Language) => void;
   onOpenSignal: (analyte: string) => void;
   onOpenVault: () => void;
-  userId?: string | null;
-  onSavedRecord?: () => void;
-  onOpenAsk?: () => void;
+  onOpenAsk?: (ephemeral: EphemeralChatContext) => void;
 }) {
   const [showOtherTrends, setShowOtherTrends] = useState(false);
   const [pulseOpen, setPulseOpen] = useState(false);
@@ -192,8 +189,6 @@ export function HomeScreen({
       <PulseSheet
         open={pulseOpen}
         onClose={() => setPulseOpen(false)}
-        userId={userId}
-        onSavedRecord={onSavedRecord}
         onOpenAsk={onOpenAsk}
       />
 
@@ -207,6 +202,7 @@ export function HomeScreen({
       <FaceDiagnosisSheet
         open={faceDiagnosisOpen}
         onClose={() => setFaceDiagnosisOpen(false)}
+        onOpenAsk={onOpenAsk}
         language={language}
       />
 

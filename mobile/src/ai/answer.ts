@@ -36,13 +36,17 @@ of two kinds. Decide which one this is, then follow its rules.
 
 1) Questions about the user's OWN health, reports, results or trends -- for
    example "is my sugar rising", "what was my HbA1c in 2023", "which
-   hospitals have my reports".
-   - Use ONLY the facts and trends given below. Never estimate, never fill a
-     gap from general knowledge.
+   hospitals have my reports". This also covers an on-device screening result
+   given below, if one is present, and questions about it.
+   - Use ONLY the facts, trends, and on-device screening results given below.
+     Never estimate, never fill a gap from general knowledge.
    - If what's given does not contain enough to answer, say so plainly and
      honestly -- you do not have that in their records yet. Do not guess.
    - Never invent a trend. If a trend is supplied, you may restate it. If
      none is supplied, do not imply one exists.
+   - An on-device screening result, if present, is this session's data only.
+     It was never saved and will not be there next time -- never imply it was
+     stored, and never treat it as part of their saved report history.
 
 2) General medical or health knowledge questions that are NOT about the
    user's own records -- for example what a medicine or tablet is for, what a
@@ -101,8 +105,10 @@ export async function answerQuestion(opts: {
   insights: Insight[];
   history?: ChatTurn[];
   language: Language;
+  /** An unsaved, session-only screening result (e.g. camera pulse or face reading). */
+  extraContext?: string;
 }): Promise<string> {
-  const { question, facts, insights, language } = opts;
+  const { question, facts, insights, language, extraContext } = opts;
   const history = (opts.history ?? []).slice(-HISTORY_TURNS);
 
   const factsBlock =
@@ -117,9 +123,13 @@ export async function answerQuestion(opts: {
       insights.map((i) => `- ${i.statement}`).join('\n')
     : '\n\nNo trend was computed. Do not suggest one exists.';
 
+  const extraBlock = extraContext
+    ? `\n\nOn-device screening result for this session only (never saved, will not persist):\n${extraContext}`
+    : '';
+
   if (config.mock) {
-    return facts.length
-      ? 'Demo mode is enabled, so questions are not answered by the language model. Review the report results and trend cards shown in the app.'
+    return facts.length || extraContext
+      ? 'Demo mode is enabled, so questions are not answered by the language model. Review the results shown in the app.'
       : 'Demo mode is enabled and no recorded results are available. Add a report to see results and trends.';
   }
 
@@ -131,7 +141,7 @@ export async function answerQuestion(opts: {
       ...history.map((t) => ({ role: t.role, content: t.text })),
       {
         role: 'user',
-        content: factsBlock + trendBlock + `\n\nThe user asks: ${question}`,
+        content: factsBlock + trendBlock + extraBlock + `\n\nThe user asks: ${question}`,
       },
     ],
     temperature: 0.3,

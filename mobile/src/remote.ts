@@ -18,6 +18,7 @@ function requireUserId(userId: string | null): string {
 /** Rows as they are shaped in Postgres. */
 interface DocumentRow {
   id: string;
+  person_id: string | null;
   title: string;
   source_name: string;
   doc_date: string | null;
@@ -78,6 +79,7 @@ export async function fetchDocuments(): Promise<StoredDocument[]> {
   const data = await readAll('documents', 'doc_date', false);
   return (data as DocumentRow[]).map((r) => ({
     id: r.id,
+    person_id: r.person_id,
     title: r.title,
     source_name: r.source_name,
     doc_date: r.doc_date ?? '',

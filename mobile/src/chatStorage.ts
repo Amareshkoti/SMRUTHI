@@ -4,6 +4,8 @@ import type { StoredMessage } from './db';
 export interface LocalChat {
   id: string;
   title: string;
+  /** Whose records this chat is scoped to. null means the signed-in person themself. */
+  personId: string | null;
   createdAt: string;
   updatedAt: string;
   messages: StoredMessage[];
