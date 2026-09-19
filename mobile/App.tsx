@@ -275,7 +275,7 @@ function AppInner() {
           {view === 'signal' && focusedInsight && (
             <SignalScreen key={focusedInsight.analyte} insight={focusedInsight} onBack={() => setView('home')} />
           )}
-          {view === 'memory' && <MemoryScreen documents={documents} facts={facts} note={note} />}
+          {view === 'memory' && <MemoryScreen documents={documents} facts={facts} note={note} family={family} />}
           {view === 'ask' && (
             <AskScreen
               facts={facts}

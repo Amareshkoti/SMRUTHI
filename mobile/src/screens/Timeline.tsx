@@ -1,19 +1,27 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { c, font, space } from '../theme';
 import { Screen, Notice } from '../components/Chrome';
 import type { Fact } from '../api';
 import type { StoredDocument } from '../db';
+import type { FamilyProfile } from '../family';
+
+/** 'all' shows everyone's reports; 'me' is the signed-in person's own (person_id null); else a family member's id. */
+type PersonFilter = 'all' | 'me' | string;
 
 export function MemoryScreen({
   documents,
   facts,
   note,
+  family,
 }: {
   documents: StoredDocument[];
   facts: Fact[];
   note: string | null;
+  family: FamilyProfile[];
 }) {
+  const [filter, setFilter] = useState<PersonFilter>('all');
+
   const factsByDoc = new Map<string, Fact[]>();
   for (const f of facts) {
     if (!f.docId) continue;
@@ -21,6 +29,10 @@ export function MemoryScreen({
     list.push(f);
     factsByDoc.set(f.docId, list);
   }
+
+  const filteredDocuments = filter === 'all'
+    ? documents
+    : documents.filter((d) => (d.person_id ?? null) === (filter === 'me' ? null : filter));
 
   return (
     <Screen>
@@ -36,13 +48,36 @@ export function MemoryScreen({
         </View>
       ) : null}
 
+      {family.length ? (
+        <View style={styles.personSlot}>
+          <Text style={styles.personLabel}>SHOW REPORTS FOR</Text>
+          <View style={styles.personChoices}>
+            <Pressable onPress={() => setFilter('all')} style={[styles.person, filter === 'all' && styles.personOn]}>
+              <Text style={[styles.personText, filter === 'all' && styles.personTextOn]}>Everyone</Text>
+            </Pressable>
+            <Pressable onPress={() => setFilter('me')} style={[styles.person, filter === 'me' && styles.personOn]}>
+              <Text style={[styles.personText, filter === 'me' && styles.personTextOn]}>Me</Text>
+            </Pressable>
+            {family.map((member) => (
+              <Pressable key={member.id} onPress={() => setFilter(member.id)} style={[styles.person, filter === member.id && styles.personOn]}>
+                <Text style={[styles.personText, filter === member.id && styles.personTextOn]}>{member.displayName}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
       {documents.length === 0 ? (
         <View style={styles.empty}>
           <Text style={styles.emptyText}>No reports on this phone. Add your oldest one first.</Text>
         </View>
+      ) : filteredDocuments.length === 0 ? (
+        <View style={styles.empty}>
+          <Text style={styles.emptyText}>No reports for this person yet.</Text>
+        </View>
       ) : (
         <View style={styles.list}>
-          {documents.map((d) => {
+          {filteredDocuments.map((d) => {
             const chips = (factsByDoc.get(d.id) ?? []).map((f) => `${f.analyte} ${f.value}`);
             return (
               <View key={d.id} style={styles.card}>
@@ -74,6 +109,14 @@ const styles = StyleSheet.create({
   subtitle: { fontFamily: font.body, fontSize: 14, lineHeight: 23, color: c.textMuted, marginTop: space(1.25), maxWidth: 280 },
 
   noteSlot: { marginHorizontal: space(3), marginTop: space(2.75) },
+
+  personSlot: { marginHorizontal: space(3), marginTop: space(2.75) },
+  personLabel: { fontFamily: font.bodySemibold, fontSize: 10, letterSpacing: 1.4, color: c.textFaint, marginBottom: space(1) },
+  personChoices: { flexDirection: 'row', gap: space(1), flexWrap: 'wrap' },
+  person: { borderRadius: 12, borderWidth: 1, borderColor: c.hairSoft, paddingHorizontal: space(1.5), paddingVertical: space(0.9) },
+  personOn: { borderColor: c.gold, backgroundColor: c.goldWash },
+  personText: { fontFamily: font.bodyMedium, fontSize: 12, color: c.textMuted },
+  personTextOn: { color: c.gold },
 
   empty: { marginHorizontal: space(3), marginTop: space(3.25), borderRadius: 18, borderWidth: 1, borderColor: c.hairSoft, borderStyle: 'dashed', padding: space(3) },
   emptyText: { fontFamily: font.body, fontSize: 14, lineHeight: 23, color: c.textMuted },
