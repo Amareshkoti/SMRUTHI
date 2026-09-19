@@ -22,6 +22,7 @@ import { supabase } from './src/supabase';
 import { clearLocalChats } from './src/chatStorage';
 import { detectLocalTrends } from './src/trendAnalysis';
 import { useUploadJob } from './src/uploadJob';
+import { usePrescriptionJob } from './src/prescriptionJob';
 import { reportTools } from './modules/report-tools';
 import { fetchFamily, type FamilyProfile } from './src/family';
 import type { EphemeralChatContext } from './src/ephemeralChat';
@@ -58,6 +59,7 @@ function AppInner() {
   const [warning, setWarning] = useState<{ insight: Insight; message: string | null } | null>(null);
   const [phrasing, setPhrasing] = useState(false);
   const uploadJob = useUploadJob();
+  const prescriptionJob = usePrescriptionJob();
 
   // A pending on-device screening (pulse/face) to chat about. Lives only in
   // memory -- never written to chatStorage or the SQLite cache -- and is
@@ -303,6 +305,13 @@ function AppInner() {
           {view === 'family' && <FamilyScreen onBack={() => setView('vault')} onChanged={() => void refreshFamily()} />}
         </View>
         {uploadJob?.busy ? <ReportProcessingOverlay text={uploadJob.text} /> : null}
+        {prescriptionJob?.busy ? (
+          <ReportProcessingOverlay
+            text={prescriptionJob.text}
+            title="Reading your prescription"
+            bottom={uploadJob?.busy ? 154 : 84}
+          />
+        ) : null}
 
         {view !== 'signal' && !keyboardUp && (
           <BottomNav active={view} onChange={setView} onAdd={() => setSheetOpen(true)} />

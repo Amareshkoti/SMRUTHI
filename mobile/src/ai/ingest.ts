@@ -52,13 +52,18 @@ export async function ingestPrescription(
 ): Promise<PrescriptionExtraction> {
   const native = reportTools();
   const pages = file.mimeType === 'application/pdf' ? await native.pageCount(file.uri) : 1;
-  const results: PrescriptionExtraction[] = [];
+
+  progress(pages > 1 ? `Rendering ${pages} pages` : 'Rendering the page');
+  const images: string[] = [];
   for (let i = 0; i < pages; i++) {
-    progress(pages > 1 ? `Reading page ${i + 1} of ${pages}` : 'Reading the prescription');
-    const image = file.mimeType === 'application/pdf'
-      ? await native.renderPage(file.uri, i) : await native.renderImage(file.uri);
-    results.push(await extractPrescriptionFromImage(image, 'image/jpeg'));
+    images.push(file.mimeType === 'application/pdf' ? await native.renderPage(file.uri, i) : await native.renderImage(file.uri));
   }
+
+  // Rendering is local and fast; the vision call is the slow part and each
+  // page is independent, so run them together instead of one at a time.
+  progress(pages > 1 ? `Reading ${pages} pages` : 'Reading the prescription');
+  const results = await Promise.all(images.map((image) => extractPrescriptionFromImage(image, 'image/jpeg')));
+
   progress('Checking the prescription');
   const medicines = results.flatMap((r) => r.medicines);
   if (!results.some((r) => r.isPrescription)) {

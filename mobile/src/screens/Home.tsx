@@ -10,6 +10,7 @@ import { fmt } from '../insightDisplay';
 import { formatWarning, isSafeWarningMessage, type Fact, type Insight, type Language } from '../api';
 import type { StoredDocument } from '../db';
 import type { EphemeralChatContext } from '../ephemeralChat';
+import { usePrescriptionJob } from '../prescriptionJob';
 
 export function HomeScreen({
   documents,
@@ -38,6 +39,7 @@ export function HomeScreen({
   const [pulseOpen, setPulseOpen] = useState(false);
   const [faceDiagnosisOpen, setFaceDiagnosisOpen] = useState(false);
   const [prescriptionOpen, setPrescriptionOpen] = useState(false);
+  const prescriptionJob = usePrescriptionJob();
   const top = warning?.insight ?? null;
   const watch = !top ? insights.find((i) => i.severity === 'info') ?? null : null;
   const empty = documents.length === 0;
@@ -211,9 +213,15 @@ export function HomeScreen({
       <Pressable onPress={() => setPrescriptionOpen(true)} style={styles.pulseCard} accessibilityRole="button">
         <View>
           <Text style={styles.pulseCardTitle}>Read a prescription</Text>
-          <Text style={styles.pulseCardSub}>Photo or PDF · find and chat about the medicines</Text>
+          <Text style={styles.pulseCardSub}>
+            {prescriptionJob?.busy
+              ? `${prescriptionJob.text}…`
+              : prescriptionJob?.result
+                ? `Ready · ${prescriptionJob.result.medicines.length} medicine${prescriptionJob.result.medicines.length === 1 ? '' : 's'} found`
+                : 'Photo or PDF · find and chat about the medicines'}
+          </Text>
         </View>
-        <Text style={styles.pulseCardArrow}>→</Text>
+        {prescriptionJob?.busy ? <View style={styles.pulseCardBusyDot} /> : <Text style={styles.pulseCardArrow}>→</Text>}
       </Pressable>
       <PrescriptionSheet
         open={prescriptionOpen}
@@ -321,6 +329,7 @@ const styles = StyleSheet.create({
   pulseCardTitle: { fontFamily: font.bodyMedium, fontSize: 15, color: c.text },
   pulseCardSub: { fontFamily: font.body, fontSize: 12, color: c.textFaint, marginTop: 2 },
   pulseCardArrow: { fontFamily: font.body, fontSize: 16, color: c.gold },
+  pulseCardBusyDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: c.gold },
   stat: { flex: 1, borderRadius: 16, backgroundColor: c.surface, borderWidth: 1, borderColor: c.hair, paddingVertical: space(2), paddingHorizontal: space(1.75) },
   statValue: { fontFamily: font.displayRegular, fontSize: 26, color: c.text },
   statLabel: { fontFamily: font.body, fontSize: 11, color: c.textFaint, marginTop: 2 },

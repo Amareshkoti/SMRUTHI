@@ -4,8 +4,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import { c, font, space } from '../theme';
 import { Sheet, Button, Notice } from './Chrome';
 import { ACCEPTED_MIME_TYPES, MAX_UPLOAD_BYTES } from '../../../shared/contracts';
-import { api, type PrescriptionExtraction } from '../api';
 import { describePrescription, type EphemeralChatContext } from '../ephemeralChat';
+import { usePrescriptionJob, startPrescriptionRead, clearPrescriptionJob } from '../prescriptionJob';
 
 const ACCEPTED = [...ACCEPTED_MIME_TYPES];
 
@@ -16,12 +16,14 @@ interface Picked {
   size: number;
 }
 
-type Phase = 'intro' | 'reading' | 'result' | 'error';
-
 /**
  * Reads a photographed or scanned prescription and lists its medicines.
  * Nothing here is ever saved -- not the photo, not the extracted medicines,
- * not the chat about them. It exists only for this screen session.
+ * not the chat about them.
+ *
+ * Reading runs in prescriptionJob.ts, not in this component: tapping
+ * "Minimize" closes the sheet but leaves the read running, so it doesn't
+ * block using the rest of the app while a slow vision call finishes.
  */
 export function PrescriptionSheet({
   open,
@@ -32,27 +34,15 @@ export function PrescriptionSheet({
   onClose: () => void;
   onOpenAsk?: (ephemeral: EphemeralChatContext) => void;
 }) {
+  const job = usePrescriptionJob();
   const [picked, setPicked] = useState<Picked | null>(null);
-  const [phase, setPhase] = useState<Phase>('intro');
-  const [stageText, setStageText] = useState('');
-  const [result, setResult] = useState<PrescriptionExtraction | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
 
-  function reset() {
-    setPicked(null);
-    setPhase('intro');
-    setStageText('');
-    setResult(null);
-    setError(null);
-  }
-
-  function close() {
-    reset();
-    onClose();
-  }
+  const phase: 'intro' | 'reading' | 'result' | 'error' =
+    job?.busy ? 'reading' : job?.error ? 'error' : job?.result ? 'result' : 'intro';
 
   async function pick() {
-    setError(null);
+    setPickError(null);
     try {
       const res = await DocumentPicker.getDocumentAsync({
         type: ACCEPTED,
@@ -65,42 +55,46 @@ export function PrescriptionSheet({
 
       const mimeType = asset.mimeType ?? '';
       if (!ACCEPTED.includes(mimeType)) {
-        setError('Please choose a PDF or a photo of the prescription.');
+        setPickError('Please choose a PDF or a photo of the prescription.');
         return;
       }
       if (asset.size && asset.size > MAX_UPLOAD_BYTES) {
-        setError(`That file is larger than ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB. A photo of the page is usually enough.`);
+        setPickError(`That file is larger than ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)} MB. A photo of the page is usually enough.`);
         return;
       }
       setPicked({ uri: asset.uri, name: asset.name || 'prescription', mimeType, size: asset.size ?? 0 });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not open the file picker.');
+      setPickError(err instanceof Error ? err.message : 'Could not open the file picker.');
     }
   }
 
-  async function read() {
+  function read() {
     if (!picked) return;
-    setPhase('reading');
-    setError(null);
-    try {
-      const extracted = await api.ingestPrescription(picked, setStageText);
-      setResult(extracted);
-      setPhase('result');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not read that prescription.');
-      setPhase('error');
-    }
+    setPickError(null);
+    void startPrescriptionRead(picked);
+  }
+
+  /** Closing while reading does NOT cancel it -- the job keeps running in the background. */
+  function minimize() {
+    onClose();
+  }
+
+  function readAnother() {
+    clearPrescriptionJob();
+    setPicked(null);
+    setPickError(null);
   }
 
   function chatAboutResults() {
-    if (!result || !onOpenAsk) return;
+    if (!job?.result || !onOpenAsk) return;
     onClose();
-    onOpenAsk({ label: 'Prescription', facts: [], extraContext: describePrescription(result), mode: 'prescription' });
-    reset();
+    onOpenAsk({ label: 'Prescription', facts: [], extraContext: describePrescription(job.result), mode: 'prescription' });
+    clearPrescriptionJob();
+    setPicked(null);
   }
 
   return (
-    <Sheet open={open} onClose={close}>
+    <Sheet open={open} onClose={onClose}>
       <ScrollView style={styles.sheetScroll} contentContainerStyle={styles.sheetContent} showsVerticalScrollIndicator={false}>
         <Text style={styles.title}>Read a prescription</Text>
         <Text style={styles.subtitle}>
@@ -128,14 +122,14 @@ export function PrescriptionSheet({
               )}
             </Pressable>
 
-            {error ? (
+            {pickError ? (
               <View style={styles.errorSlot}>
-                <Notice text={error} tone="error" />
+                <Notice text={pickError} tone="error" />
               </View>
             ) : null}
 
             <View style={styles.actions}>
-              <Button label="Minimize" onPress={close} tone="quiet" />
+              <Button label="Minimize" onPress={onClose} tone="quiet" />
               <View style={styles.spacer}>
                 <Button label="Read it" onPress={read} disabled={!picked} />
               </View>
@@ -144,15 +138,24 @@ export function PrescriptionSheet({
         )}
 
         {phase === 'reading' && (
-          <View style={styles.stages}>
-            <View style={styles.stageRow}>
-              <View style={[styles.dot, styles.dotActive]} />
-              <Text style={styles.stageLabel}>{stageText || 'Reading the page'}</Text>
+          <>
+            <View style={styles.stages}>
+              <View style={styles.stageRow}>
+                <View style={[styles.dot, styles.dotActive]} />
+                <Text style={styles.stageLabel}>{job?.text || 'Reading the prescription'}</Text>
+              </View>
             </View>
-          </View>
+            <Text style={styles.minimizeHint}>
+              This can take a moment. Minimize and it keeps reading in the background -- come back
+              to this screen any time to see the medicines.
+            </Text>
+            <View style={styles.actions}>
+              <Button label="Minimize" onPress={minimize} tone="quiet" />
+            </View>
+          </>
         )}
 
-        {phase === 'result' && result && (
+        {phase === 'result' && job?.result && (
           <>
             <View style={styles.memoryBox}>
               <View style={styles.memoryHead}>
@@ -170,16 +173,16 @@ export function PrescriptionSheet({
               ) : null}
             </View>
 
-            {(result.doctor || result.hospital || result.documentDate) ? (
+            {(job.result.doctor || job.result.hospital || job.result.documentDate) ? (
               <Text style={styles.meta}>
-                {[result.doctor, result.hospital, result.documentDate].filter(Boolean).join(' · ')}
+                {[job.result.doctor, job.result.hospital, job.result.documentDate].filter(Boolean).join(' · ')}
               </Text>
             ) : null}
 
             <View style={styles.medsSection}>
-              <Text style={styles.medsSectionTitle}>{result.medicines.length} medicine{result.medicines.length === 1 ? '' : 's'} found</Text>
+              <Text style={styles.medsSectionTitle}>{job.result.medicines.length} medicine{job.result.medicines.length === 1 ? '' : 's'} found</Text>
               <View style={styles.medsGrid}>
-                {result.medicines.map((med, idx) => (
+                {job.result.medicines.map((med, idx) => (
                   <View key={`${med.name}-${idx}`} style={styles.medCard}>
                     <Text style={styles.medName}>{med.name}</Text>
                     {(med.strength || med.frequency || med.duration) ? (
@@ -199,9 +202,9 @@ export function PrescriptionSheet({
             </View>
 
             <View style={styles.actions}>
-              <Button label="Read another" onPress={reset} tone="quiet" />
+              <Button label="Read another" onPress={readAnother} tone="quiet" />
               <View style={styles.spacer} />
-              <Button label="Done" onPress={close} />
+              <Button label="Done" onPress={onClose} />
             </View>
           </>
         )}
@@ -209,12 +212,12 @@ export function PrescriptionSheet({
         {phase === 'error' && (
           <>
             <View style={styles.errorSlot}>
-              <Notice text={error ?? 'Could not read that prescription.'} tone="error" />
+              <Notice text={job?.error ?? 'Could not read that prescription.'} tone="error" />
             </View>
             <View style={styles.actions}>
-              <Button label="Close" onPress={close} tone="quiet" />
+              <Button label="Close" onPress={onClose} tone="quiet" />
               <View style={styles.spacer} />
-              <Button label="Try again" onPress={() => setPhase('intro')} />
+              <Button label="Try again" onPress={readAnother} />
             </View>
           </>
         )}
@@ -248,6 +251,7 @@ const styles = StyleSheet.create({
   dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(255,255,255,.12)' },
   dotActive: { backgroundColor: c.gold },
   stageLabel: { fontFamily: font.body, fontSize: 13, color: c.textSoft },
+  minimizeHint: { fontFamily: font.body, fontSize: 12, lineHeight: 18, color: c.textFaint, marginTop: space(1.5) },
 
   memoryBox: {
     backgroundColor: 'rgba(127,195,165,.08)', borderWidth: 1, borderColor: 'rgba(127,195,165,.25)',
